@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # -D warnings on every compile (deps + workspace). Keep byte-identical across all
+  # jobs: any per-job RUSTFLAGS delta re-fingerprints the whole graph and every
+  # sccache object key, defeating reuse.
+  RUSTFLAGS: "-D warnings"
+  # sccache caches individual rustc invocations across jobs AND runs, backed by a
+  # Cloudflare R2 bucket (S3 API) when its secrets are present; absent it fails open:
+  # an empty RUSTC_WRAPPER disables the wrapper and an empty SCCACHE_BUCKET drops
+  # sccache to its local-disk default. Builds run uncached but green.
+  RUSTC_WRAPPER: ${{ secrets.R2_ACCOUNT_ID != '' && 'sccache' || '' }}
+  CARGO_INCREMENTAL: "0"
+  SCCACHE_BUCKET: ${{ secrets.R2_ACCOUNT_ID != '' && 'videre-sccache' || '' }}
+  SCCACHE_ENDPOINT: https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com
+  SCCACHE_REGION: auto
+  SCCACHE_S3_KEY_PREFIX: ci/rust-1.94
+  AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/rust-setup
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check # parse-only; never compiles
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/rust-setup
+        with:
+          components: clippy
+      # clippy runs in its own job and target dir: no build/doc step precedes it, so
+      # -D warnings is re-evaluated on clippy's own fingerprints and can never be
+      # served from an rmeta a warning-tolerant build primed.
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: rui314/setup-mold@9c9c13bf4c3f1adef0cc596abc155580bcb04444 # v1
+      - uses: ./.github/actions/rust-setup
+        with:
+          targets: wasm32-wasip2
+      - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
+        with:
+          tool: nextest
+      # Build the 4 videre guest wasms ONCE (release/wasm32-wasip2): the reference
+      # venue adapter (echo-venue), its client/keeper pair, and the fault fixture the
+      # platform integration tests load. Per-module size report folded in.
+      - name: build module wasms (+ size report)
+        run: |
+          cargo build --release --target wasm32-wasip2 --locked \
+            -p echo-venue -p echo-client -p echo-keeper -p flaky-venue
+          {
+            echo "### module .wasm sizes"
+            echo "| module | bytes |"
+            echo "|---|---:|"
+            for f in target/wasm32-wasip2/release/*.wasm; do
+              printf '| %s | %s |\n' "$(basename "$f" .wasm)" "$(wc -c < "$f")"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+      # The zero-leak invariant (videre-host stays free of any concrete venue) rides
+      # in videre-host/tests/zero_leak.rs, run here as an ordinary workspace test.
+      - run: cargo nextest run --workspace --all-features --no-fail-fast --locked
+      - run: cargo test --doc --workspace --all-features --locked
+
+  docs:
+    name: rustdoc
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: "-D warnings"
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/rust-setup
+      - run: cargo doc --workspace --no-deps --locked
+
+  # Lenient guard that the workspace still type-checks for arm64. `continue-on-error`
+  # keeps this a signal, not a gate; `cargo check` (no final link) needs no cross
+  # linker. Push/dispatch only.
+  cross-check:
+    name: cross-check aarch64
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: ./.github/actions/rust-setup
+        with:
+          targets: aarch64-unknown-linux-gnu
+      - name: install arm64 cross toolchain
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+      - name: cargo check
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          CXX_aarch64_unknown_linux_gnu: aarch64-linux-gnu-g++
+          AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
+        run: cargo check --workspace --all-features --locked --target aarch64-unknown-linux-gnu
