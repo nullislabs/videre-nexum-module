@@ -19,7 +19,7 @@
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 #![allow(clippy::too_many_arguments)]
 
-use nexum::host::{logging, types};
+use nexum::host::types;
 use videre_sdk::{SubmitOutcome, Venue, VenueClient, VenueId};
 
 /// The echo venue as this keeper types it: the id the paired adapter
@@ -43,6 +43,11 @@ struct EchoKeeper;
 
 #[videre_sdk::keeper]
 impl EchoKeeper {
+    fn init(_config: Vec<(String, String)>) -> Result<(), Fault> {
+        install_tracing();
+        Ok(())
+    }
+
     async fn on_block(block: types::Block) -> Result<(), Fault> {
         let venue = VenueClient::<EchoVenue>::new();
         let body = EchoBody::V1(block.number);
@@ -51,58 +56,40 @@ impl EchoKeeper {
         // exactly the bytes it is later handed. ClientError folds into
         // the wire fault, so `?` applies throughout.
         let quoted = venue.quote(&body).await?;
-        logging::log(
-            logging::Level::Info,
-            &format!(
-                "quoted at {}: gives {} amount bytes",
-                EchoVenue::ID,
-                quoted.quotation().gives.amount.len(),
-            ),
+        tracing::info!(
+            "quoted at {}: gives {} amount bytes",
+            EchoVenue::ID,
+            quoted.quotation().gives.amount.len(),
         );
         let receipt = match quoted.submit().await? {
             SubmitOutcome::Accepted(receipt) => receipt,
             SubmitOutcome::RequiresSigning(_) => {
-                logging::log(
-                    logging::Level::Warn,
-                    &format!("{} unexpectedly asked for a signature", EchoVenue::ID),
-                );
+                tracing::warn!("{} unexpectedly asked for a signature", EchoVenue::ID);
                 return Ok(());
             }
         };
-        logging::log(
-            logging::Level::Info,
-            &format!(
-                "submitted to {}: receipt {} bytes",
-                EchoVenue::ID,
-                receipt.len(),
-            ),
+        tracing::info!(
+            "submitted to {}: receipt {} bytes",
+            EchoVenue::ID,
+            receipt.len(),
         );
 
         let status = venue.status(&receipt).await?;
-        logging::log(
-            logging::Level::Info,
-            &format!("status at {}: {status:?}", EchoVenue::ID),
-        );
+        tracing::info!("status at {}: {status:?}", EchoVenue::ID);
 
         venue.cancel(&receipt).await?;
-        logging::log(
-            logging::Level::Info,
-            &format!("cancelled at {}", EchoVenue::ID),
-        );
+        tracing::info!("cancelled at {}", EchoVenue::ID);
         Ok(())
     }
 
     fn on_intent_status(update: types::IntentStatusUpdate) -> Result<(), Fault> {
         let body = nexum_sdk::status_body::StatusBody::decode(&update.status)
             .map_err(|err| Fault::InvalidInput(err.to_string()))?;
-        logging::log(
-            logging::Level::Info,
-            &format!(
-                "intent status from venue {}: {:?} ({} receipt bytes)",
-                update.venue,
-                body.status,
-                update.receipt.len(),
-            ),
+        tracing::info!(
+            "intent status from venue {}: {:?} ({} receipt bytes)",
+            update.venue,
+            body.status,
+            update.receipt.len(),
         );
         Ok(())
     }

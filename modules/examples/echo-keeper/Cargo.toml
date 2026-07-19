@@ -14,5 +14,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 nexum-sdk = { git = "https://github.com/nullislabs/nexum-runtime", rev = "17005ba50466e18a64b2f145544c75198549d8a1" }
+tracing = { version = "0.1", default-features = false }
 videre-sdk = { path = "../../../crates/videre-sdk" }
 wit-bindgen = { version = "0.59", default-features = false, features = ["macros", "realloc"] }
