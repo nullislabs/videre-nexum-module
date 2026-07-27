@@ -11,7 +11,7 @@ workspace = true
 
 [dependencies]
 # The runtime seam this crate plugs into; the only nexum crate edge.
-nexum-runtime = { path = "../../../nexum/crates/nexum-runtime" }
+nexum-runtime = { git = "https://github.com/nullislabs/nexum-runtime", rev = "6f0e3558039abe928cc19d7ce7da13fc2275533e" }
 # Encoder for the opaque status body the host event stream carries; the
 # registry lowers an adapter-reported status through it.
 videre-status-body = { path = "../videre-status-body" }
@@ -38,6 +38,6 @@ test-utils = []
 # so `cargo test -p videre-host` sees `install_for_test` without every
 # invocation passing `--features test-utils`.
 videre-host = { path = ".", features = ["test-utils"] }
-nexum-runtime = { path = "../../../nexum/crates/nexum-runtime", features = ["test-utils"] }
-nexum-tasks = { path = "../../../nexum/crates/nexum-tasks" }
+nexum-runtime = { git = "https://github.com/nullislabs/nexum-runtime", rev = "6f0e3558039abe928cc19d7ce7da13fc2275533e", features = ["test-utils"] }
+nexum-tasks = { git = "https://github.com/nullislabs/nexum-runtime", rev = "6f0e3558039abe928cc19d7ce7da13fc2275533e" }
 tempfile.workspace = true

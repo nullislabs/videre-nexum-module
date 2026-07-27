@@ -1,4 +1,14 @@
 # Cross-group WIT dependencies, vendored into wit/deps/ by wit-deps.
-# Path sources are transitional: they flip to pinned git-tag tarballs at
-# the physical carve.
-nexum-host = "../../nexum/wit/nexum-host"
+#
+# Sources are pinned to the owning repo's carve rev via the github
+# archive tarball. NOTE: the sha256/sha512 for the tarball source are
+# documented placeholders for now - builds consume the vendored copy
+# under wit/deps/ (checked in), so the digests are not exercised.
+# Re-run `wit-deps update` and record the real digests when the source
+# is next refreshed. The nexum-host package lives at wit/nexum-host in
+# the nexum-runtime repo (the tarball unpacks under a
+# nexum-runtime-<rev>/ top-level directory).
+[nexum-host]
+url = "https://github.com/nullislabs/nexum-runtime/archive/6f0e3558039abe928cc19d7ce7da13fc2275533e.tar.gz"
+sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+sha512 = "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
