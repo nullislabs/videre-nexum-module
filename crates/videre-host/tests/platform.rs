@@ -32,14 +32,14 @@ const INTENT_STATUS: &str = "intent-status";
 
 // ── fixtures + assembly ───────────────────────────────────────────────
 
-/// Workspace-root-relative path. `CARGO_MANIFEST_DIR` is
-/// `crates/videre-host`; two parents up is the workspace root.
+/// Path under the workspace root (the topmost ancestor with a `Cargo.toml`).
 fn workspace_path(relative: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("crates dir")
-        .parent()
-        .expect("workspace root")
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    manifest
+        .ancestors()
+        .filter(|d| d.join("Cargo.toml").is_file())
+        .last()
+        .unwrap_or(manifest)
         .join(relative)
 }
 
@@ -409,7 +409,7 @@ async fn e2e_ethflow_watcher_boots_and_handles_intent_status() {
     let Some(wasm) = module_wasm_or_skip("ethflow-watcher") else {
         return;
     };
-    let manifest = workspace_path("modules/ethflow-watcher/module.toml");
+    let manifest = workspace_path("shepherd/modules/ethflow-watcher/module.toml");
     let videre = Arc::new(platform(&EngineConfig::default()));
     let mut supervisor = boot_example(&videre, &wasm, &manifest).await;
     assert_eq!(supervisor.alive_count(), 1);
@@ -583,13 +583,17 @@ async fn e2e_echo_module_registry_adapter_round_trip() {
     let config = EngineConfig {
         adapters: vec![AdapterEntry {
             path: adapter_wasm,
-            manifest: Some(workspace_path("modules/examples/echo-venue/module.toml")),
+            manifest: Some(workspace_path(
+                "videre/modules/examples/echo-venue/module.toml",
+            )),
             http_allow: Vec::new(),
             messaging_topics: Vec::new(),
         }],
         modules: vec![ModuleEntry {
             path: module_wasm,
-            manifest: Some(workspace_path("modules/examples/echo-client/module.toml")),
+            manifest: Some(workspace_path(
+                "videre/modules/examples/echo-client/module.toml",
+            )),
         }],
         ..Default::default()
     };
@@ -691,13 +695,17 @@ async fn e2e_keeper_module_drives_the_venue_through_the_typed_client() {
     let config = EngineConfig {
         adapters: vec![AdapterEntry {
             path: adapter_wasm,
-            manifest: Some(workspace_path("modules/examples/echo-venue/module.toml")),
+            manifest: Some(workspace_path(
+                "videre/modules/examples/echo-venue/module.toml",
+            )),
             http_allow: Vec::new(),
             messaging_topics: Vec::new(),
         }],
         modules: vec![ModuleEntry {
             path: module_wasm,
-            manifest: Some(workspace_path("modules/examples/echo-keeper/module.toml")),
+            manifest: Some(workspace_path(
+                "videre/modules/examples/echo-keeper/module.toml",
+            )),
         }],
         ..Default::default()
     };
@@ -774,13 +782,15 @@ async fn e2e_twap_monitor_boots_against_the_cow_adapter() {
             // Sepolia variant: twap-monitor pins chain 11155111, so the
             // adapter manifest must name the same chain for the pair to
             // submit to the right orderbook.
-            manifest: Some(workspace_path("crates/cow-venue/module.sepolia.toml")),
+            manifest: Some(workspace_path(
+                "shepherd/crates/cow-venue/module.sepolia.toml",
+            )),
             http_allow: Vec::new(),
             messaging_topics: Vec::new(),
         }],
         modules: vec![ModuleEntry {
             path: module_wasm,
-            manifest: Some(workspace_path("modules/twap-monitor/module.toml")),
+            manifest: Some(workspace_path("shepherd/modules/twap-monitor/module.toml")),
         }],
         ..Default::default()
     };
@@ -941,7 +951,9 @@ async fn boot_flaky_venue(
     let config = EngineConfig {
         adapters: vec![AdapterEntry {
             path: adapter_wasm,
-            manifest: Some(workspace_path("modules/fixtures/flaky-venue/module.toml")),
+            manifest: Some(workspace_path(
+                "videre/modules/fixtures/flaky-venue/module.toml",
+            )),
             http_allow: Vec::new(),
             messaging_topics: Vec::new(),
         }],

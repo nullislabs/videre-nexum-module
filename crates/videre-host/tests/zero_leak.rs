@@ -16,14 +16,14 @@ use nexum_runtime::test_utils::{
 };
 use videre_host::{VenueRegistry, platform};
 
-/// Workspace-root-relative path. `CARGO_MANIFEST_DIR` is
-/// `crates/videre-host`; two parents up is the workspace root.
+/// Path under the workspace root (the topmost ancestor with a `Cargo.toml`).
 fn workspace_path(relative: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .expect("crates dir")
-        .parent()
-        .expect("workspace root")
+    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    manifest
+        .ancestors()
+        .filter(|d| d.join("Cargo.toml").is_file())
+        .last()
+        .unwrap_or(manifest)
         .join(relative)
 }
 
@@ -73,13 +73,17 @@ async fn e2e_echo_venue_boots_and_submits_through_the_generic_seam() {
     let config = EngineConfig {
         adapters: vec![AdapterEntry {
             path: adapter_wasm,
-            manifest: Some(workspace_path("modules/examples/echo-venue/module.toml")),
+            manifest: Some(workspace_path(
+                "videre/modules/examples/echo-venue/module.toml",
+            )),
             http_allow: Vec::new(),
             messaging_topics: Vec::new(),
         }],
         modules: vec![ModuleEntry {
             path: module_wasm,
-            manifest: Some(workspace_path("modules/examples/echo-client/module.toml")),
+            manifest: Some(workspace_path(
+                "videre/modules/examples/echo-client/module.toml",
+            )),
         }],
         ..Default::default()
     };
