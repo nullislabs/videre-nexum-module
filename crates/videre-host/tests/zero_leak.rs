@@ -73,17 +73,13 @@ async fn e2e_echo_venue_boots_and_submits_through_the_generic_seam() {
     let config = EngineConfig {
         adapters: vec![AdapterEntry {
             path: adapter_wasm,
-            manifest: Some(workspace_path(
-                "videre/modules/examples/echo-venue/module.toml",
-            )),
+            manifest: Some(workspace_path("modules/examples/echo-venue/module.toml")),
             http_allow: Vec::new(),
             messaging_topics: Vec::new(),
         }],
         modules: vec![ModuleEntry {
             path: module_wasm,
-            manifest: Some(workspace_path(
-                "videre/modules/examples/echo-client/module.toml",
-            )),
+            manifest: Some(workspace_path("modules/examples/echo-client/module.toml")),
         }],
         ..Default::default()
     };
@@ -119,6 +115,14 @@ async fn e2e_echo_venue_boots_and_submits_through_the_generic_seam() {
 
 /// The graph oracle: `cargo tree` for the host crate (normal + build
 /// edges) names no videre, intent, venue, or cow crate.
+///
+/// After the carve, `nexum-runtime` is a git dependency rather than a
+/// local workspace member, so `--all-features` cannot be requested for it
+/// (`cargo` rejects feature selection for packages outside the workspace).
+/// The subtree is instead rendered with the feature set the workspace
+/// already resolves for it (which includes the `test-utils` feature
+/// `videre-host` activates), keeping the invariant meaningful: the generic
+/// runtime, as this host actually links it, reaches no venue-shaped crate.
 #[test]
 fn host_crate_graph_reaches_no_venue_shaped_crate() {
     let output = Command::new(env!("CARGO"))
@@ -128,7 +132,6 @@ fn host_crate_graph_reaches_no_venue_shaped_crate() {
             "nexum-runtime",
             "-e",
             "normal,build",
-            "--all-features",
             "--prefix",
             "none",
             "--locked",

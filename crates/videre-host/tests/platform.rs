@@ -583,17 +583,13 @@ async fn e2e_echo_module_registry_adapter_round_trip() {
     let config = EngineConfig {
         adapters: vec![AdapterEntry {
             path: adapter_wasm,
-            manifest: Some(workspace_path(
-                "videre/modules/examples/echo-venue/module.toml",
-            )),
+            manifest: Some(workspace_path("modules/examples/echo-venue/module.toml")),
             http_allow: Vec::new(),
             messaging_topics: Vec::new(),
         }],
         modules: vec![ModuleEntry {
             path: module_wasm,
-            manifest: Some(workspace_path(
-                "videre/modules/examples/echo-client/module.toml",
-            )),
+            manifest: Some(workspace_path("modules/examples/echo-client/module.toml")),
         }],
         ..Default::default()
     };
@@ -695,17 +691,13 @@ async fn e2e_keeper_module_drives_the_venue_through_the_typed_client() {
     let config = EngineConfig {
         adapters: vec![AdapterEntry {
             path: adapter_wasm,
-            manifest: Some(workspace_path(
-                "videre/modules/examples/echo-venue/module.toml",
-            )),
+            manifest: Some(workspace_path("modules/examples/echo-venue/module.toml")),
             http_allow: Vec::new(),
             messaging_topics: Vec::new(),
         }],
         modules: vec![ModuleEntry {
             path: module_wasm,
-            manifest: Some(workspace_path(
-                "videre/modules/examples/echo-keeper/module.toml",
-            )),
+            manifest: Some(workspace_path("modules/examples/echo-keeper/module.toml")),
         }],
         ..Default::default()
     };
@@ -951,9 +943,7 @@ async fn boot_flaky_venue(
     let config = EngineConfig {
         adapters: vec![AdapterEntry {
             path: adapter_wasm,
-            manifest: Some(workspace_path(
-                "videre/modules/fixtures/flaky-venue/module.toml",
-            )),
+            manifest: Some(workspace_path("modules/fixtures/flaky-venue/module.toml")),
             http_allow: Vec::new(),
             messaging_topics: Vec::new(),
         }],
