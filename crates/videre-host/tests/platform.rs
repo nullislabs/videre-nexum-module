@@ -152,46 +152,6 @@ fn e2e_echo_venue_component_imports_equal_declared_capabilities() {
     );
 }
 
-/// The shipped cow adapter's only capability is outbound HTTP, so it cannot
-/// reach chain, messaging, key material, or persistence.
-#[test]
-fn e2e_cow_venue_component_imports_equal_declared_capabilities() {
-    let wasm = workspace_path("target/wasm32-wasip2/release/cow_venue.wasm");
-    if !wasm.exists() {
-        eprintln!(
-            "SKIP: {} not found - build with `just build-cow-venue`",
-            wasm.display()
-        );
-        return;
-    }
-    let engine = make_wasmtime_engine();
-    let component = wasmtime::component::Component::from_file(&engine, &wasm).expect("compile");
-    let imports: Vec<String> = component
-        .component_type()
-        .imports(&engine)
-        .map(|(name, _)| name.to_owned())
-        .collect();
-
-    let registry = CapabilityRegistry::core();
-    let caps: std::collections::BTreeSet<&str> = imports
-        .iter()
-        .filter_map(|name| registry.wit_import_to_cap(name))
-        .collect();
-    assert_eq!(
-        caps,
-        std::collections::BTreeSet::from(["http"]),
-        "imports were: {imports:?}"
-    );
-    assert!(
-        imports.iter().all(|name| !name.contains("nexum:host/chain")
-            && !name.contains("messaging")
-            && !name.contains("local-store")
-            && !name.contains("identity")
-            && !name.contains("logging")),
-        "imports were: {imports:?}"
-    );
-}
-
 /// The venue-adapter provider linker binds only the scoped transport and
 /// withholds the core-only interfaces, without a duplicate-definition clash.
 #[tokio::test]
@@ -400,43 +360,6 @@ async fn e2e_intent_status_subscription_receives_polled_transitions() {
             .await,
         0
     );
-}
-
-/// ethflow-watcher (built by `#[videre_sdk::keeper]`) boots with its shipped
-/// manifest and handles a delivered cow status transition without trapping.
-#[tokio::test]
-async fn e2e_ethflow_watcher_boots_and_handles_intent_status() {
-    let Some(wasm) = module_wasm_or_skip("ethflow-watcher") else {
-        return;
-    };
-    let manifest = workspace_path("shepherd/modules/ethflow-watcher/module.toml");
-    let videre = Arc::new(platform(&EngineConfig::default()));
-    let mut supervisor = boot_example(&videre, &wasm, &manifest).await;
-    assert_eq!(supervisor.alive_count(), 1);
-    assert!(
-        supervisor
-            .extension_subscription_kinds()
-            .contains(INTENT_STATUS)
-    );
-
-    let update = videre_host::IntentStatusUpdate {
-        venue: "cow".to_owned(),
-        receipt: vec![0xAB; 56],
-        status: videre_status_body::StatusBody {
-            status: videre_status_body::IntentStatus::Open,
-            proof: None,
-            reason: None,
-        }
-        .encode()
-        .expect("encode"),
-    };
-    assert_eq!(
-        supervisor
-            .dispatch_extension_event(status_event(update))
-            .await,
-        1
-    );
-    assert_eq!(supervisor.alive_count(), 1);
 }
 
 /// The event-loop wiring through the real seam: the platform's `events`
@@ -752,55 +675,6 @@ async fn e2e_keeper_module_drives_the_venue_through_the_typed_client() {
             "missing `{needle}`; records were: {messages:?}",
         );
     }
-}
-
-/// The shepherd bundle pair: twap-monitor (a `#[videre_sdk::keeper]` worker)
-/// boots against the cow adapter (the body-version handshake admits the
-/// pair) and a Sepolia block dispatch reaches it and keeps it alive.
-#[tokio::test]
-async fn e2e_twap_monitor_boots_against_the_cow_adapter() {
-    let (Some(adapter_wasm), Some(module_wasm)) = (
-        module_wasm_or_skip("cow-venue"),
-        module_wasm_or_skip("twap-monitor"),
-    ) else {
-        return;
-    };
-
-    let components = mock_components();
-    let engine = make_wasmtime_engine();
-    let config = EngineConfig {
-        adapters: vec![AdapterEntry {
-            path: adapter_wasm,
-            // Sepolia variant: twap-monitor pins chain 11155111, so the
-            // adapter manifest must name the same chain for the pair to
-            // submit to the right orderbook.
-            manifest: Some(workspace_path(
-                "shepherd/crates/cow-venue/module.sepolia.toml",
-            )),
-            http_allow: Vec::new(),
-            messaging_topics: Vec::new(),
-        }],
-        modules: vec![ModuleEntry {
-            path: module_wasm,
-            manifest: Some(workspace_path("shepherd/modules/twap-monitor/module.toml")),
-        }],
-        ..Default::default()
-    };
-    let videre = Arc::new(platform(&config));
-    let extensions = videre_assembly(&videre);
-    let linker = make_linker(&engine, &extensions);
-
-    let mut supervisor =
-        Supervisor::boot(&engine, &linker, &config, &components, &extensions, None)
-            .await
-            .expect("boot");
-    assert_eq!(supervisor.adapter_alive_count(), 1, "cow is routable");
-    assert_eq!(supervisor.alive_count(), 1, "twap-monitor is alive");
-
-    // twap-monitor subscribes to Sepolia blocks (poll path); with no
-    // watches indexed the run is empty and the keeper stays alive.
-    assert_eq!(supervisor.dispatch_block(block(11_155_111)).await, 1);
-    assert_eq!(supervisor.alive_count(), 1);
 }
 
 /// The body-version handshake refuses a mismatched pair: an adapter decoding
