@@ -3010,7 +3010,7 @@ dependencies = [
 [[package]]
 name = "nexum-module-macros"
 version = "0.1.0"
-source = "git+https://github.com/nullislabs/nexum-runtime?rev=6f0e3558039abe928cc19d7ce7da13fc2275533e#6f0e3558039abe928cc19d7ce7da13fc2275533e"
+source = "git+https://github.com/nullislabs/nexum-runtime?rev=d78a368aa0544dd8cf1100ce657df0eada781f1a#d78a368aa0544dd8cf1100ce657df0eada781f1a"
 dependencies = [
  "nexum-world",
  "proc-macro2",
@@ -3021,7 +3021,7 @@ dependencies = [
 [[package]]
 name = "nexum-runtime"
 version = "0.1.0"
-source = "git+https://github.com/nullislabs/nexum-runtime?rev=6f0e3558039abe928cc19d7ce7da13fc2275533e#6f0e3558039abe928cc19d7ce7da13fc2275533e"
+source = "git+https://github.com/nullislabs/nexum-runtime?rev=d78a368aa0544dd8cf1100ce657df0eada781f1a#d78a368aa0544dd8cf1100ce657df0eada781f1a"
 dependencies = [
  "alloy-chains",
  "alloy-primitives",
@@ -3060,7 +3060,7 @@ dependencies = [
 [[package]]
 name = "nexum-sdk"
 version = "0.1.0"
-source = "git+https://github.com/nullislabs/nexum-runtime?rev=6f0e3558039abe928cc19d7ce7da13fc2275533e#6f0e3558039abe928cc19d7ce7da13fc2275533e"
+source = "git+https://github.com/nullislabs/nexum-runtime?rev=d78a368aa0544dd8cf1100ce657df0eada781f1a#d78a368aa0544dd8cf1100ce657df0eada781f1a"
 dependencies = [
  "alloy-chains",
  "alloy-json-rpc",
@@ -3086,7 +3086,7 @@ dependencies = [
 [[package]]
 name = "nexum-sdk-test"
 version = "0.1.0"
-source = "git+https://github.com/nullislabs/nexum-runtime?rev=6f0e3558039abe928cc19d7ce7da13fc2275533e#6f0e3558039abe928cc19d7ce7da13fc2275533e"
+source = "git+https://github.com/nullislabs/nexum-runtime?rev=d78a368aa0544dd8cf1100ce657df0eada781f1a#d78a368aa0544dd8cf1100ce657df0eada781f1a"
 dependencies = [
  "nexum-sdk",
  "tracing",
@@ -3095,7 +3095,7 @@ dependencies = [
 [[package]]
 name = "nexum-tasks"
 version = "0.1.0"
-source = "git+https://github.com/nullislabs/nexum-runtime?rev=6f0e3558039abe928cc19d7ce7da13fc2275533e#6f0e3558039abe928cc19d7ce7da13fc2275533e"
+source = "git+https://github.com/nullislabs/nexum-runtime?rev=d78a368aa0544dd8cf1100ce657df0eada781f1a#d78a368aa0544dd8cf1100ce657df0eada781f1a"
 dependencies = [
  "futures",
  "tokio",
@@ -3105,7 +3105,7 @@ dependencies = [
 [[package]]
 name = "nexum-world"
 version = "0.1.0"
-source = "git+https://github.com/nullislabs/nexum-runtime?rev=6f0e3558039abe928cc19d7ce7da13fc2275533e#6f0e3558039abe928cc19d7ce7da13fc2275533e"
+source = "git+https://github.com/nullislabs/nexum-runtime?rev=d78a368aa0544dd8cf1100ce657df0eada781f1a#d78a368aa0544dd8cf1100ce657df0eada781f1a"
 dependencies = [
  "strum",
  "syn 2.0.118",
