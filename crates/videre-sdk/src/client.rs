@@ -72,9 +72,8 @@ pub trait Venue {
 
     /// Classify a `denied` detail into the retry action the generic
     /// keeper path folds it to. Defaults to the coarse mapping: every
-    /// denial drops. Static, not a method: markers are unit types, so
-    /// the keeper carries this as a plain `fn` pointer
-    /// ([`DenialClassifier`](crate::keeper::DenialClassifier)).
+    /// denial drops. Static so the keeper carries it as a
+    /// [`DenialClassifier`](crate::keeper::DenialClassifier).
     ///
     /// Only a drop-class action retires a stranded reservation: classify
     /// a denial as [`RetryAction::TryNextBlock`] and [`reconcile`] holds
@@ -82,8 +81,7 @@ pub trait Venue {
     ///
     /// [`reconcile`]: crate::keeper::reconcile
     fn classify_denied(detail: &str) -> RetryAction {
-        let _ = detail;
-        RetryAction::Drop
+        (crate::keeper::DROP_DENIED)(detail)
     }
 }
 

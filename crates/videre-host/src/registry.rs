@@ -38,12 +38,10 @@ use crate::bindings::{
     IntentHeader, IntentStatus, Quotation, RateLimit, SubmitOutcome, VenueAdapter, VenueError,
 };
 
-/// Venue identifier an adapter registers under. Opaque beyond equality,
-/// never empty or whitespace-only: the field is private and [`VenueId::new`]
-/// is the only constructor, so every id in the process is validated.
-#[derive(
-    Clone, Debug, Eq, Hash, PartialEq, derive_more::AsRef, derive_more::Display, derive_more::Into,
-)]
+/// Venue identifier an adapter registers under. Opaque beyond equality
+/// and never empty or whitespace-only: every construction path validates
+/// ([`VenueId::new`]).
+#[derive(Clone, Debug, Eq, Hash, PartialEq, derive_more::AsRef, derive_more::Display)]
 pub struct VenueId(#[as_ref(str)] String);
 
 /// A candidate venue id failed validation at a boundary.
@@ -91,7 +89,7 @@ impl Clock for SystemClock {
     fn now_ms(&self) -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+            .map_or(0, saturating_ms)
     }
 }
 
@@ -101,9 +99,7 @@ type QuoteKey = (String, VenueId, B256);
 /// Furthest `valid-until-ms` the quote ledger records. A quotation valid
 /// beyond the horizon cannot go stale inside it, so recording one only
 /// pins memory: it is left unrecorded and its submit is unchecked, as an
-/// unquoted body is. Without this the sweep never drains, since
-/// `valid-until-ms` is adapter-supplied and `u64::MAX` is legitimate
-/// (both in-tree adapters quote it).
+/// unquoted body is.
 const QUOTE_HORIZON_MS: u64 = 3_600_000;
 
 /// Cap on live ledger entries, mirroring the watch set's default. At the
@@ -330,10 +326,9 @@ struct VenueRegistryInner {
     watched: Mutex<Vec<WatchedIntent>>,
     clock: Arc<dyn Clock>,
     /// Quoted body digests mapped to their `valid-until-ms`; entries
-    /// expired past [`QUOTE_GRACE_MS`] sweep on every touch, and
-    /// [`record_quote`] admits neither beyond [`QUOTE_HORIZON_MS`] nor
-    /// past [`MAX_QUOTE_ENTRIES`], so a guest cannot grow this without
-    /// bound.
+    /// expired past [`QUOTE_GRACE_MS`] sweep on every touch and
+    /// [`record_quote`] bounds admission, so a guest cannot grow this
+    /// without bound.
     ///
     /// [`record_quote`]: VenueRegistry::record_quote
     quotes: Mutex<HashMap<QuoteKey, u64>>,
@@ -419,10 +414,9 @@ impl VenueRegistry {
     }
 
     /// Record a successful quote so [`submit`](Self::submit) can
-    /// staleness-check the same bytes. Bounded twice over: a quotation
-    /// valid past [`QUOTE_HORIZON_MS`] is not recorded at all, and at
-    /// [`MAX_QUOTE_ENTRIES`] a new digest is refused. Either way the
-    /// submit goes unchecked rather than the ledger growing.
+    /// staleness-check the same bytes; past [`QUOTE_HORIZON_MS`] or at
+    /// [`MAX_QUOTE_ENTRIES`] the quote goes unrecorded and its submit
+    /// unchecked.
     fn record_quote(&self, caller: &str, venue: &VenueId, body: &[u8], valid_until_ms: u64) {
         let now = self.inner.clock.now_ms();
         if valid_until_ms > now.saturating_add(QUOTE_HORIZON_MS) {
@@ -446,10 +440,8 @@ impl VenueRegistry {
         }
     }
 
-    /// Refuse bytes this registry quoted whose `valid-until-ms` has
-    /// elapsed. A body never quoted has no entry and passes: quoting is
-    /// not mandatory on this wire. The stale entry is removed with the
-    /// refusal, so the caller re-quotes to re-arm.
+    /// Refuse quoted bytes whose `valid-until-ms` has elapsed, removing
+    /// the entry so a re-quote re-arms; a body never quoted passes.
     fn check_quote_freshness(
         &self,
         caller: &str,
@@ -501,7 +493,7 @@ impl VenueRegistry {
         // once the window slides, so it is rate-limited, never denied.
         if !self.quota_admits(caller) {
             return Err(VenueError::RateLimited(RateLimit {
-                retry_after_ms: Some(window_ms(self.inner.quota.window)),
+                retry_after_ms: Some(saturating_ms(self.inner.quota.window)),
             }));
         }
         // Behind the gate: the check digests a guest-supplied body, so an
@@ -556,7 +548,7 @@ impl VenueRegistry {
         let slot = self.resolve(venue)?;
         if !self.quota_admits(caller) {
             return Err(VenueError::RateLimited(RateLimit {
-                retry_after_ms: Some(window_ms(self.inner.quota.window)),
+                retry_after_ms: Some(saturating_ms(self.inner.quota.window)),
             }));
         }
         self.charge(caller);
@@ -874,9 +866,9 @@ impl<T: RuntimeTypes> ProviderKind<T> for VenueAdapterKind {
     }
 }
 
-/// A quota window as whole milliseconds, saturating at `u64::MAX`.
-fn window_ms(window: Duration) -> u64 {
-    u64::try_from(window.as_millis()).unwrap_or(u64::MAX)
+/// A duration as whole milliseconds, saturating at `u64::MAX`.
+fn saturating_ms(d: Duration) -> u64 {
+    u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// Drop watch entries whose eviction deadline has passed, returning how
@@ -1045,8 +1037,9 @@ mod tests {
         /// Statuses served front-first by consecutive `status` calls;
         /// once drained, every further call reports `open`.
         status_script: VecDeque<Result<IntentStatus, VenueError>>,
-        /// `valid-until-ms` this adapter's quotations carry.
-        quote_valid_until_ms: u64,
+        /// `valid-until-ms` this adapter's quotations carry; shared so a
+        /// test can move it after install.
+        quote_valid_until_ms: Arc<AtomicU64>,
     }
 
     impl StubAdapter {
@@ -1057,15 +1050,21 @@ mod tests {
                 submit: Ok(SubmitOutcome::Accepted(b"receipt".to_vec())),
                 echo_receipt: false,
                 status_script: VecDeque::new(),
-                quote_valid_until_ms: QUOTE_VALID_UNTIL_MS,
+                quote_valid_until_ms: Arc::new(AtomicU64::new(QUOTE_VALID_UNTIL_MS)),
             }
         }
 
         /// Quote with `valid_until_ms`, as an adapter choosing its own
         /// horizon does.
-        fn with_quote_validity(mut self, valid_until_ms: u64) -> Self {
-            self.quote_valid_until_ms = valid_until_ms;
+        fn with_quote_validity(self, valid_until_ms: u64) -> Self {
+            self.quote_valid_until_ms
+                .store(valid_until_ms, Ordering::SeqCst);
             self
+        }
+
+        /// Handle on the quoted validity, settable after install.
+        fn shared_quote_validity(&self) -> Arc<AtomicU64> {
+            Arc::clone(&self.quote_valid_until_ms)
         }
 
         fn with_receipt_echo(mut self) -> Self {
@@ -1121,7 +1120,7 @@ mod tests {
                 self.calls.quote.fetch_add(1, Ordering::SeqCst);
                 self.enter().await;
                 Ok(Quotation {
-                    valid_until_ms: self.quote_valid_until_ms,
+                    valid_until_ms: self.quote_valid_until_ms.load(Ordering::SeqCst),
                     ..quotation()
                 })
             })
@@ -1456,6 +1455,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_re_quote_refreshes_and_re_arms() {
+        let calls = Arc::new(StubCalls::default());
+        let clock = Arc::new(TestClock::default());
+        clock.set(1_000);
+        let adapter = StubAdapter::new(calls.clone()).with_quote_validity(2_000);
+        let validity = adapter.shared_quote_validity();
+        let registry = registry_at(clock.clone(), adapter);
+
+        // Re-quoting the same bytes refreshes the one entry in place.
+        registry
+            .quote("mod-a", &cow(), b"body".to_vec())
+            .await
+            .expect("quote succeeds");
+        validity.store(3_000, Ordering::SeqCst);
+        registry
+            .quote("mod-a", &cow(), b"body".to_vec())
+            .await
+            .expect("re-quote succeeds");
+        assert_eq!(quote_ledger_len(&registry), 1);
+
+        // Past the first validity but inside the refreshed one: the
+        // refreshed `valid-until-ms` governs.
+        clock.set(2_500);
+        registry
+            .submit("mod-a", &cow(), b"body".to_vec())
+            .await
+            .expect("refreshed quote submits");
+
+        // Past the refreshed validity: refused, the entry gone with the
+        // refusal.
+        clock.set(3_001);
+        let err = registry
+            .submit("mod-a", &cow(), b"body".to_vec())
+            .await
+            .expect_err("stale quote refused");
+        assert!(matches!(err, VenueError::Denied(r) if r.starts_with("stale-quote: ")));
+        assert_eq!(quote_ledger_len(&registry), 0);
+
+        // A fresh quote re-arms the same bytes for a clean submit.
+        validity.store(4_000, Ordering::SeqCst);
+        registry
+            .quote("mod-a", &cow(), b"body".to_vec())
+            .await
+            .expect("re-quote after refusal succeeds");
+        assert_eq!(quote_ledger_len(&registry), 1);
+        registry
+            .submit("mod-a", &cow(), b"body".to_vec())
+            .await
+            .expect("re-armed quote submits");
+        assert_eq!(calls.submit.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
     async fn a_quote_past_the_horizon_is_not_recorded() {
         let calls = Arc::new(StubCalls::default());
         let clock = Arc::new(TestClock::default());
@@ -1507,6 +1559,14 @@ mod tests {
                 .expect("quote succeeds");
         }
         assert_eq!(quote_ledger_len(&registry), MAX_QUOTE_ENTRIES);
+
+        // An over-cap quote goes unrecorded: its own submit degrades to
+        // unchecked (accepted here) rather than denied, while the live
+        // entries stay armed.
+        registry
+            .submit("mod-a", &cow(), 1_030u32.to_le_bytes().to_vec())
+            .await
+            .expect("an over-cap quote's submit is unchecked");
 
         // A live entry is never evicted to make room: the first body
         // quoted still refuses once its validity elapses.

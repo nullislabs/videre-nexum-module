@@ -20,8 +20,9 @@ use crate::{SubmitOutcome, UnsignedTx, VenueFault};
 /// [`reconcile`] stay non-generic over the venue.
 pub type DenialClassifier = fn(&str) -> RetryAction;
 
-/// The default classification: every denial drops.
-const DROP_DENIED: DenialClassifier = |_| RetryAction::Drop;
+/// The default classification: every denial drops. The one statement of
+/// the rule; [`Venue::classify_denied`]'s default delegates here.
+pub(crate) const DROP_DENIED: DenialClassifier = |_| RetryAction::Drop;
 
 /// What one poll asks the run to do with its watch.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -76,8 +77,8 @@ impl<S, P> Keeper<S, P> {
     }
 
     /// Adopt a venue's denial classification, normally the bound
-    /// marker's. Prefer [`Keeper::for_venue`], which takes both the id
-    /// and the classification from the marker and cannot disagree.
+    /// marker's; prefer [`Keeper::for_venue`], which cannot disagree
+    /// with the marker.
     #[must_use]
     pub fn with_classifier(mut self, classify: DenialClassifier) -> Self {
         self.classify = classify;
@@ -228,15 +229,11 @@ impl<S, P: VenueTransport> Keeper<S, P> {
 /// - accepted: committed.
 /// - `requires-signing`: released, the tx surfaced to the caller.
 /// - drop-class refusal under `classify` ([`RetryAction::Drop`] or
-///   [`RetryAction::DropOnRepeat`]): released. A denial the venue softens
-///   to `DropOnRepeat` still releases here; its grace is the watch-level
-///   [`Retrier`] ledger, which the next tick's poll re-enters.
+///   [`RetryAction::DropOnRepeat`]): released; the `DropOnRepeat` grace
+///   lives in the watch-level [`Retrier`] ledger.
 /// - backing-off refusal (a rate-limit hint, or a denial the venue
 ///   classifies to [`RetryAction::Backoff`]): re-parks `next_eligible`.
 /// - transient refusal: left `RESERVED` for the next tick.
-///
-/// Every refusal arm folds through one private `refusal_disposition`, so
-/// the pass never derives a disposition the retry mapping disagrees with.
 pub async fn reconcile<H, P>(
     venue: &VenueId,
     venues: &P,
@@ -1471,17 +1468,15 @@ mod tests {
 
     #[test]
     fn sweep_and_free_fn_agree() {
-        let fault = VenueFault::Denied(GRACE_DENIAL.into());
-        assert_eq!(
-            retry_action::<GraceVenue>(&fault),
-            RetryAction::DropOnRepeat
-        );
-
-        // The sweep under the marker's classifier applies that same
-        // action: the first refusal keeps the watch (the grace)...
+        // The free-fn side (GRACE_DENIAL softens to DropOnRepeat) is
+        // marker_classification_reaches_the_generic_path; the default
+        // keeper's first-refusal drop is
+        // non_retryable_refusal_drops_the_watch. Here: the sweep under
+        // the marker's classifier applies that same action, so the first
+        // refusal keeps the watch (the grace)...
         let host = MockLocalStore::default();
         put_watch(&host);
-        let venue = StubVenue::new(Err(fault.clone()));
+        let venue = StubVenue::new(Err(VenueFault::Denied(GRACE_DENIAL.into())));
         let sweep = Keeper::new(
             StubSource(Outcome::Submit(b"body".to_vec())),
             &venue,
@@ -1500,16 +1495,6 @@ mod tests {
         };
         run(sweep.run(&host, &later)).expect("keeper runs");
         assert!(WatchSet::new(&host).list().expect("list reads").is_empty());
-
-        // Without the classifier the sweep matches the free fn default:
-        // the same fault drops on the first refusal.
-        assert_eq!(retry_action::<NowhereVenue>(&fault), RetryAction::Drop);
-        let host = MockLocalStore::default();
-        put_watch(&host);
-        let report = run(keeper(Outcome::Submit(b"body".to_vec()), &venue).run(&host, &TICK))
-            .expect("keeper runs");
-        assert_eq!(report.dropped, 1);
-        assert!(WatchSet::new(&host).list().expect("list reads").is_empty());
     }
 
     #[test]
@@ -1525,13 +1510,8 @@ mod tests {
         assert_eq!(report.reconciled_pending, 0);
         assert_eq!(report.reconciled_released, 1);
         assert_eq!(mark(&host, b"order"), None);
-
-        // The default classification releases the same reservation.
-        let host = MockLocalStore::default();
-        seed_reserved(&host, b"order");
-        let report = run(idle_keeper(&venue).run(&host, &TICK)).expect("keeper runs");
-        assert_eq!(report.reconciled_released, 1);
-        assert_eq!(mark(&host, b"order"), None);
+        // The default-classification release is
+        // reconcile_terminal_refusal_releases_and_stays_gone.
     }
 
     #[test]
