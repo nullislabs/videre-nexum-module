@@ -51,7 +51,8 @@ const VENUE_KIND: &str = "venue-adapter";
 /// instead fills a client-side `impl Venue for Marker {}`, emitting the
 /// `const ID`/`type Body` and asserting the id equals `[module] name`. No
 /// component world, so a keeper linking the client slice never pulls adapter
-/// bindgen.
+/// bindgen. The impl body stays open for a provided-method override such as
+/// `classify_denied`; only a hand-written `ID` or `Body` is rejected.
 #[proc_macro_attribute]
 pub fn venue(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(item as ItemImpl);
