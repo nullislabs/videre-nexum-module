@@ -235,8 +235,8 @@ impl<S, P: VenueTransport> Keeper<S, P> {
 ///   classifies to [`RetryAction::Backoff`]): re-parks `next_eligible`.
 /// - transient refusal: left `RESERVED` for the next tick.
 ///
-/// Every refusal arm folds through [`refusal_disposition`], so the pass
-/// never derives a disposition the retry mapping disagrees with.
+/// Every refusal arm folds through one private `refusal_disposition`, so
+/// the pass never derives a disposition the retry mapping disagrees with.
 pub async fn reconcile<H, P>(
     venue: &VenueId,
     venues: &P,
