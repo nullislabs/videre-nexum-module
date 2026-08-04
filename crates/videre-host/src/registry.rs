@@ -10,8 +10,9 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use alloy_primitives::{B256, keccak256};
 use anyhow::{Context, anyhow};
 use async_trait::async_trait;
 use futures::future::BoxFuture;
@@ -72,6 +73,29 @@ impl std::str::FromStr for VenueId {
         Self::new(s)
     }
 }
+
+/// Wall-clock source behind the quote-staleness check; injected so tests
+/// pin time.
+#[auto_impl::auto_impl(&, Arc)]
+pub trait Clock: Send + Sync {
+    /// Unix epoch milliseconds.
+    fn now_ms(&self) -> u64;
+}
+
+/// [`SystemTime::now`] since `UNIX_EPOCH`; a pre-epoch clock reads 0.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SystemClock;
+
+impl Clock for SystemClock {
+    fn now_ms(&self) -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+    }
+}
+
+/// One recorded quote: the caller, venue, and body digest it binds.
+type QuoteKey = (String, VenueId, B256);
 
 /// Egress interposition run on the derived header between `derive-header`
 /// and `submit`. Advisory-only: a `Deny` is logged, the submission proceeds.
@@ -282,6 +306,10 @@ struct VenueRegistryInner {
     /// Receipts under status watch; pruned on terminal status, expiry, or
     /// [`WatchLimit`] overflow.
     watched: Mutex<Vec<WatchedIntent>>,
+    clock: Arc<dyn Clock>,
+    /// Quoted body digests mapped to their `valid-until-ms`; expired
+    /// entries sweep on every touch, so growth is bounded by live quotes.
+    quotes: Mutex<HashMap<QuoteKey, u64>>,
 }
 
 /// The keeper-facing venue registry, cheap to clone.
@@ -363,17 +391,53 @@ impl VenueRegistry {
         history.push_back(Instant::now());
     }
 
-    /// Submit an opaque body to `venue` for `caller`: resolve, quota-gate,
-    /// derive the header, run the advisory guard, forward to the adapter.
-    /// Charged once the header derives (ahead of guard and adapter), plus on
-    /// a decode failure; other derive-stage errors stay uncharged and
-    /// retryable.
+    /// Record a successful quote so [`submit`](Self::submit) can
+    /// staleness-check the same bytes.
+    fn record_quote(&self, caller: &str, venue: &VenueId, digest: B256, valid_until_ms: u64) {
+        let now = self.inner.clock.now_ms();
+        let mut quotes = self.inner.quotes.lock().expect("quote ledger poisoned");
+        quotes.retain(|_, &mut until| now <= until);
+        quotes.insert((caller.to_owned(), venue.clone(), digest), valid_until_ms);
+    }
+
+    /// Refuse bytes this registry quoted whose `valid-until-ms` has
+    /// elapsed. A body never quoted has no entry and passes: quoting is
+    /// not mandatory on this wire. The stale entry is removed with the
+    /// refusal, so the caller re-quotes to re-arm.
+    fn check_quote_freshness(
+        &self,
+        caller: &str,
+        venue: &VenueId,
+        body: &[u8],
+    ) -> Result<(), VenueError> {
+        let key = (caller.to_owned(), venue.clone(), keccak256(body));
+        let now = self.inner.clock.now_ms();
+        let mut quotes = self.inner.quotes.lock().expect("quote ledger poisoned");
+        let recorded = quotes.get(&key).copied();
+        quotes.retain(|_, &mut until| now <= until);
+        match recorded {
+            Some(until) if now > until => Err(VenueError::Denied(format!(
+                "stale-quote: valid-until-ms {until} elapsed at {now}"
+            ))),
+            _ => Ok(()),
+        }
+    }
+
+    /// Submit an opaque body to `venue` for `caller`: staleness-check the
+    /// quote ledger, resolve, quota-gate, derive the header, run the
+    /// advisory guard, forward to the adapter. Bytes this registry quoted
+    /// are refused as `Denied` with the `stale-quote:` prefix once the
+    /// quotation's `valid-until-ms` elapses; unquoted bytes are not
+    /// checked. Charged once the header derives (ahead of guard and
+    /// adapter), plus on a decode failure; other derive-stage errors stay
+    /// uncharged and retryable.
     pub async fn submit(
         &self,
         caller: &str,
         venue: &VenueId,
         body: Vec<u8>,
     ) -> Result<SubmitOutcome, VenueError> {
+        self.check_quote_freshness(caller, venue, &body)?;
         let slot = self.resolve(venue)?;
         // Gate before touching the adapter so a quota-exhausted caller never
         // reaches the adapter store or its mutex. Exhaustion is retryable
@@ -421,7 +485,8 @@ impl VenueRegistry {
     }
 
     /// Price an opaque body at `venue` for `caller`. No header or guard, but
-    /// quota-gated: each quote spends one unit.
+    /// quota-gated: each quote spends one unit. A successful quote records
+    /// the body digest in the ledger backing the submit staleness check.
     pub async fn quote(
         &self,
         caller: &str,
@@ -436,7 +501,10 @@ impl VenueRegistry {
         }
         self.charge(caller);
         let mut adapter = slot.lock().await;
-        adapter.quote(&body).await
+        let quoted = adapter.quote(&body).await?;
+        drop(adapter);
+        self.record_quote(caller, venue, keccak256(&body), quoted.valid_until_ms);
+        Ok(quoted)
     }
 
     /// Put an externally-obtained `(venue, receipt)` under status watch, for
@@ -774,16 +842,18 @@ pub struct VenueRegistryBuilder {
     guard: Arc<dyn EgressGuard>,
     quota: SubmitQuota,
     watch_limit: WatchLimit,
+    clock: Arc<dyn Clock>,
 }
 
 impl VenueRegistryBuilder {
-    /// Builder with the given quota, the unit guard, and the default watch
-    /// limit.
+    /// Builder with the given quota, the unit guard, the default watch
+    /// limit, and the system clock.
     pub fn new(quota: SubmitQuota) -> Self {
         Self {
             guard: Arc::new(()),
             quota,
             watch_limit: WatchLimit::default(),
+            clock: Arc::new(SystemClock),
         }
     }
 
@@ -796,6 +866,12 @@ impl VenueRegistryBuilder {
     /// Override the status-watch bounds.
     pub fn with_watch_limit(mut self, watch_limit: WatchLimit) -> Self {
         self.watch_limit = watch_limit;
+        self
+    }
+
+    /// Override the wall clock the quote-staleness check reads.
+    pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
+        self.clock = clock;
         self
     }
 
@@ -823,6 +899,8 @@ impl VenueRegistryBuilder {
                 watch_limit,
                 ledger: Mutex::new(QuotaLedger::default()),
                 watched: Mutex::new(Vec::new()),
+                clock: self.clock,
+                quotes: Mutex::new(HashMap::new()),
             }),
         }
     }
@@ -838,7 +916,7 @@ pub struct DuplicateVenue {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
     use videre_status_body::IntentStatus as Lifecycle;
 
@@ -1018,7 +1096,7 @@ mod tests {
                 asset: Asset::Native,
                 amount: Vec::new(),
             },
-            valid_until_ms: 1_700_000_000_000,
+            valid_until_ms: QUOTE_VALID_UNTIL_MS,
         }
     }
 
@@ -1051,6 +1129,160 @@ mod tests {
             .install(cow(), Liveness::default(), adapter)
             .expect("install adapter");
         registry
+    }
+
+    /// The `valid-until-ms` the stub's [`quotation`] carries. Far future,
+    /// so a system-clock test never sees a stale fixture quote.
+    const QUOTE_VALID_UNTIL_MS: u64 = 100_000_000_000_000;
+
+    /// Millisecond test clock, settable mid-test.
+    #[derive(Default)]
+    struct TestClock(AtomicU64);
+
+    impl TestClock {
+        fn set(&self, now_ms: u64) {
+            self.0.store(now_ms, Ordering::SeqCst);
+        }
+    }
+
+    impl Clock for TestClock {
+        fn now_ms(&self) -> u64 {
+            self.0.load(Ordering::SeqCst)
+        }
+    }
+
+    /// Registry over a pinned clock, default policy otherwise.
+    fn registry_at(clock: Arc<TestClock>, adapter: StubAdapter) -> VenueRegistry {
+        let registry = VenueRegistryBuilder::new(SubmitQuota::default())
+            .with_clock(clock)
+            .build();
+        registry
+            .install(cow(), Liveness::default(), adapter)
+            .expect("install adapter");
+        registry
+    }
+
+    /// Live entries in the quote ledger.
+    fn quote_ledger_len(registry: &VenueRegistry) -> usize {
+        registry
+            .inner
+            .quotes
+            .lock()
+            .expect("quote ledger poisoned")
+            .len()
+    }
+
+    #[tokio::test]
+    async fn stale_quote_submit_is_denied() {
+        let calls = Arc::new(StubCalls::default());
+        let clock = Arc::new(TestClock::default());
+        clock.set(QUOTE_VALID_UNTIL_MS - 1);
+        let registry = registry_at(clock.clone(), StubAdapter::new(calls.clone()));
+
+        registry
+            .quote("mod-a", &cow(), b"body".to_vec())
+            .await
+            .expect("quote succeeds");
+        assert_eq!(quote_ledger_len(&registry), 1);
+        clock.set(QUOTE_VALID_UNTIL_MS + 1);
+
+        let err = registry
+            .submit("mod-a", &cow(), b"body".to_vec())
+            .await
+            .expect_err("stale quote refused");
+        let VenueError::Denied(reason) = err else {
+            panic!("expected denied, got {err:?}");
+        };
+        assert!(
+            reason.starts_with("stale-quote: "),
+            "machine prefix intact: {reason}"
+        );
+        // Refused ahead of the adapter, and the entry is gone with the
+        // refusal.
+        assert_eq!(calls.submit.load(Ordering::SeqCst), 0);
+        assert_eq!(quote_ledger_len(&registry), 0);
+    }
+
+    #[tokio::test]
+    async fn fresh_quote_submits() {
+        let calls = Arc::new(StubCalls::default());
+        let clock = Arc::new(TestClock::default());
+        clock.set(QUOTE_VALID_UNTIL_MS - 1);
+        let registry = registry_at(clock.clone(), StubAdapter::new(calls.clone()));
+
+        registry
+            .quote("mod-a", &cow(), b"body".to_vec())
+            .await
+            .expect("quote succeeds");
+        // The boundary instant is still fresh: only `now > valid-until-ms`
+        // refuses.
+        clock.set(QUOTE_VALID_UNTIL_MS);
+
+        registry
+            .submit("mod-a", &cow(), b"body".to_vec())
+            .await
+            .expect("fresh quote submits");
+        assert_eq!(calls.submit.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn unquoted_body_submits_without_a_ledger_check() {
+        let calls = Arc::new(StubCalls::default());
+        let clock = Arc::new(TestClock::default());
+        // Long past every validity: only a recorded quote can go stale.
+        clock.set(u64::MAX);
+        let registry = registry_at(clock, StubAdapter::new(calls.clone()));
+
+        registry
+            .submit("mod-a", &cow(), b"never-quoted".to_vec())
+            .await
+            .expect("unquoted bytes submit as today");
+        assert_eq!(calls.submit.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn a_stale_quote_binds_its_caller_only() {
+        let calls = Arc::new(StubCalls::default());
+        let clock = Arc::new(TestClock::default());
+        clock.set(QUOTE_VALID_UNTIL_MS - 1);
+        let registry = registry_at(clock.clone(), StubAdapter::new(calls.clone()));
+
+        registry
+            .quote("mod-a", &cow(), b"body".to_vec())
+            .await
+            .expect("quote succeeds");
+        clock.set(QUOTE_VALID_UNTIL_MS + 1);
+
+        // The ledger keys on (caller, venue, digest): mod-b never quoted
+        // these bytes, so its submit is unchecked.
+        registry
+            .submit("mod-b", &cow(), b"body".to_vec())
+            .await
+            .expect("another caller's identical bytes submit");
+        assert_eq!(calls.submit.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn expired_entries_prune() {
+        let calls = Arc::new(StubCalls::default());
+        let clock = Arc::new(TestClock::default());
+        clock.set(QUOTE_VALID_UNTIL_MS - 1);
+        let registry = registry_at(clock.clone(), StubAdapter::new(calls));
+
+        registry
+            .quote("mod-a", &cow(), b"body".to_vec())
+            .await
+            .expect("quote succeeds");
+        assert_eq!(quote_ledger_len(&registry), 1);
+        clock.set(QUOTE_VALID_UNTIL_MS + 1);
+
+        // Any ledger touch sweeps expired entries: a submit of different
+        // bytes drops the stale record it never matched.
+        registry
+            .submit("mod-a", &cow(), b"other".to_vec())
+            .await
+            .expect("unquoted bytes submit");
+        assert_eq!(quote_ledger_len(&registry), 0);
     }
 
     #[tokio::test]
