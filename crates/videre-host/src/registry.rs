@@ -8,6 +8,7 @@
 //! quota gates every quote and submit; a decode failure is charged to the
 //! calling module, so a caller feeding garbage exhausts its own budget.
 
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -96,6 +97,20 @@ impl Clock for SystemClock {
 
 /// One recorded quote: the caller, venue, and body digest it binds.
 type QuoteKey = (String, VenueId, B256);
+
+/// Furthest `valid-until-ms` the quote ledger records. A quotation valid
+/// beyond the horizon cannot go stale inside it, so recording one only
+/// pins memory: it is left unrecorded and its submit is unchecked, as an
+/// unquoted body is. Without this the sweep never drains, since
+/// `valid-until-ms` is adapter-supplied and `u64::MAX` is legitimate
+/// (both in-tree adapters quote it).
+const QUOTE_HORIZON_MS: u64 = 3_600_000;
+
+/// Cap on live ledger entries, mirroring the watch set's. At the cap a
+/// quote records nothing rather than evicting a live entry, so a
+/// flooding caller leaves its own submits unchecked instead of
+/// disarming another caller's.
+const MAX_QUOTE_ENTRIES: usize = 1024;
 
 /// Egress interposition run on the derived header between `derive-header`
 /// and `submit`. Advisory-only: a `Deny` is logged, the submission proceeds.
@@ -308,7 +323,11 @@ struct VenueRegistryInner {
     watched: Mutex<Vec<WatchedIntent>>,
     clock: Arc<dyn Clock>,
     /// Quoted body digests mapped to their `valid-until-ms`; expired
-    /// entries sweep on every touch, so growth is bounded by live quotes.
+    /// entries sweep on every touch, and [`record_quote`] admits neither
+    /// beyond [`QUOTE_HORIZON_MS`] nor past [`MAX_QUOTE_ENTRIES`], so a
+    /// guest cannot grow this without bound.
+    ///
+    /// [`record_quote`]: VenueRegistry::record_quote
     quotes: Mutex<HashMap<QuoteKey, u64>>,
 }
 
@@ -392,12 +411,31 @@ impl VenueRegistry {
     }
 
     /// Record a successful quote so [`submit`](Self::submit) can
-    /// staleness-check the same bytes.
+    /// staleness-check the same bytes. Bounded twice over: a quotation
+    /// valid past [`QUOTE_HORIZON_MS`] is not recorded at all, and at
+    /// [`MAX_QUOTE_ENTRIES`] a new digest is refused. Either way the
+    /// submit goes unchecked rather than the ledger growing.
     fn record_quote(&self, caller: &str, venue: &VenueId, digest: B256, valid_until_ms: u64) {
         let now = self.inner.clock.now_ms();
+        if valid_until_ms > now.saturating_add(QUOTE_HORIZON_MS) {
+            return;
+        }
         let mut quotes = self.inner.quotes.lock().expect("quote ledger poisoned");
         quotes.retain(|_, &mut until| now <= until);
-        quotes.insert((caller.to_owned(), venue.clone(), digest), valid_until_ms);
+        let at_cap = quotes.len() >= MAX_QUOTE_ENTRIES;
+        match quotes.entry((caller.to_owned(), venue.clone(), digest)) {
+            Entry::Occupied(mut slot) => {
+                slot.insert(valid_until_ms);
+            }
+            Entry::Vacant(slot) if !at_cap => {
+                slot.insert(valid_until_ms);
+            }
+            Entry::Vacant(_) => warn!(
+                caller,
+                venue = %venue,
+                "quote ledger full - this quote's submit will not be staleness-checked",
+            ),
+        }
     }
 
     /// Refuse bytes this registry quoted whose `valid-until-ms` has
@@ -974,6 +1012,8 @@ mod tests {
         /// Statuses served front-first by consecutive `status` calls;
         /// once drained, every further call reports `open`.
         status_script: VecDeque<Result<IntentStatus, VenueError>>,
+        /// `valid-until-ms` this adapter's quotations carry.
+        quote_valid_until_ms: u64,
     }
 
     impl StubAdapter {
@@ -984,7 +1024,15 @@ mod tests {
                 submit: Ok(SubmitOutcome::Accepted(b"receipt".to_vec())),
                 echo_receipt: false,
                 status_script: VecDeque::new(),
+                quote_valid_until_ms: QUOTE_VALID_UNTIL_MS,
             }
+        }
+
+        /// Quote with `valid_until_ms`, as an adapter choosing its own
+        /// horizon does.
+        fn with_quote_validity(mut self, valid_until_ms: u64) -> Self {
+            self.quote_valid_until_ms = valid_until_ms;
+            self
         }
 
         fn with_receipt_echo(mut self) -> Self {
@@ -1039,7 +1087,10 @@ mod tests {
             Box::pin(async move {
                 self.calls.quote.fetch_add(1, Ordering::SeqCst);
                 self.enter().await;
-                Ok(quotation())
+                Ok(Quotation {
+                    valid_until_ms: self.quote_valid_until_ms,
+                    ..quotation()
+                })
             })
         }
 
@@ -1283,6 +1334,69 @@ mod tests {
             .await
             .expect("unquoted bytes submit");
         assert_eq!(quote_ledger_len(&registry), 0);
+    }
+
+    #[tokio::test]
+    async fn a_quote_past_the_horizon_is_not_recorded() {
+        let calls = Arc::new(StubCalls::default());
+        let clock = Arc::new(TestClock::default());
+        clock.set(1_000);
+        // What both in-tree adapters quote. Such a quote can never go
+        // stale, so recording it would pin the entry for the process
+        // lifetime while never producing a refusal.
+        let adapter = StubAdapter::new(calls.clone()).with_quote_validity(u64::MAX);
+        let registry = registry_at(clock, adapter);
+
+        for n in 0..64u32 {
+            registry
+                .quote("mod-a", &cow(), n.to_le_bytes().to_vec())
+                .await
+                .expect("quote succeeds");
+        }
+        assert_eq!(quote_ledger_len(&registry), 0);
+
+        // Unrecorded means unchecked, not refused.
+        registry
+            .submit("mod-a", &cow(), 0u32.to_le_bytes().to_vec())
+            .await
+            .expect("an unrecorded quote submits");
+        assert_eq!(calls.submit.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn the_quote_ledger_is_capped() {
+        let calls = Arc::new(StubCalls::default());
+        let clock = Arc::new(TestClock::default());
+        let now = 1_000;
+        clock.set(now);
+        // Inside the horizon, so every quote is a recording candidate;
+        // the quota is lifted so the cap is what bounds the ledger.
+        let adapter = StubAdapter::new(calls).with_quote_validity(now + QUOTE_HORIZON_MS);
+        let quota = SubmitQuota::new(u32::MAX, Duration::from_secs(1));
+        let registry = VenueRegistryBuilder::new(quota)
+            .with_clock(clock.clone())
+            .build();
+        registry
+            .install(cow(), Liveness::default(), adapter)
+            .expect("install adapter");
+
+        let overflow = u32::try_from(MAX_QUOTE_ENTRIES).expect("cap fits u32") + 8;
+        for n in 0..overflow {
+            registry
+                .quote("mod-a", &cow(), n.to_le_bytes().to_vec())
+                .await
+                .expect("quote succeeds");
+        }
+        assert_eq!(quote_ledger_len(&registry), MAX_QUOTE_ENTRIES);
+
+        // A live entry is never evicted to make room: the first body
+        // quoted still refuses once its validity elapses.
+        clock.set(now + QUOTE_HORIZON_MS + 1);
+        let err = registry
+            .submit("mod-a", &cow(), 0u32.to_le_bytes().to_vec())
+            .await
+            .expect_err("the first recorded quote is still bound");
+        assert!(matches!(err, VenueError::Denied(r) if r.starts_with("stale-quote: ")));
     }
 
     #[tokio::test]
