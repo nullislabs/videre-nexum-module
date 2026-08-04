@@ -323,10 +323,10 @@ fn empty_receipt_is_rejected_before_the_transport() {
 #[test]
 fn unbound_venue_is_unknown_at_the_client() {
     let client = VenueClient::<NowhereVenue, _>::with_transport(InProcessClient);
-    assert!(matches!(
+    assert_eq!(
         run(client.submit(&v2_body())).unwrap_err(),
         ClientError::Venue(VenueFault::UnknownVenue)
-    ));
+    );
 }
 
 #[test]
@@ -335,8 +335,8 @@ fn unbound_venue_quote_is_unknown_at_the_client() {
     // rejection surfaces through `VenueClient::quote` and the `Quoted`
     // typestate is never constructed.
     let client = VenueClient::<NowhereVenue, _>::with_transport(InProcessClient);
-    assert!(matches!(
+    assert_eq!(
         run(client.quote(&v2_body())).unwrap_err(),
         ClientError::Venue(VenueFault::UnknownVenue)
-    ));
+    );
 }

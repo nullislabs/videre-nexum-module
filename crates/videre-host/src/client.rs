@@ -60,19 +60,17 @@ impl<T: RuntimeTypes> Host for HostState<T> {
 mod tests {
     use super::*;
 
-    /// The seam every `Host` method routes the wire venue id through. The
-    /// `VenueId` field is private to `registry`, so no method here can
-    /// build one that skipped this check.
+    /// The seam every `Host` method routes the wire venue id through.
     #[test]
     fn a_blank_wire_venue_id_is_unknown_venue() {
-        assert!(matches!(
-            venue_id(String::new()),
-            Err(VenueError::UnknownVenue)
-        ));
-        assert!(matches!(
-            venue_id("  ".to_owned()),
-            Err(VenueError::UnknownVenue)
-        ));
+        assert_eq!(
+            venue_id(String::new()).unwrap_err(),
+            VenueError::UnknownVenue
+        );
+        assert_eq!(
+            venue_id("  ".to_owned()).unwrap_err(),
+            VenueError::UnknownVenue
+        );
         assert_eq!(venue_id("cow".to_owned()).expect("parses").as_str(), "cow");
     }
 }
