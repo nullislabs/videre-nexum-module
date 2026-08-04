@@ -1,6 +1,12 @@
 # logging-venue adapter manifest - the logging-capability test fixture.
 # Declares logging alone, so the per-component world the macro derives
 # imports nexum:host/logging and nothing else.
+#
+# This drives the compile-time world only. The pinned runtime's provider
+# capability registry carries no logging row, so booting an adapter against
+# this manifest fails with `unknown capability "logging"`; the platform test
+# boots a manifest that omits the declaration until nullislabs/nexum-runtime#76
+# lands.
 
 [module]
 name = "logging-venue"

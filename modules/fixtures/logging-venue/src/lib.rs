@@ -19,6 +19,10 @@ use videre_sdk::{
     VenueError,
 };
 
+/// Message of the per-level probe events `init` emits; the platform test
+/// matches on it exactly, so it must not collide with another event.
+const LEVEL_PROBE: &str = "logging-venue level probe";
+
 struct LoggingVenue;
 
 #[videre_sdk::venue]
@@ -32,6 +36,14 @@ impl VenueAdapter for LoggingVenue {
             config_entries = config.len(),
             "logging-venue config sighted"
         );
+        // One probe per level, so the platform test pins the whole level
+        // ladder the venue macro emits: a transposed or collapsed arm
+        // cannot hide behind the two events above.
+        tracing::trace!("{LEVEL_PROBE}");
+        tracing::debug!("{LEVEL_PROBE}");
+        tracing::info!("{LEVEL_PROBE}");
+        tracing::warn!("{LEVEL_PROBE}");
+        tracing::error!("{LEVEL_PROBE}");
         Ok(())
     }
 

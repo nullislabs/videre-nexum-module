@@ -50,7 +50,9 @@ const VENUE_KIND: &str = "venue-adapter";
 /// binding the standard `nexum_sdk` tracing facade (and panic hook) to the
 /// adapter's `nexum:host/logging` import; call it once at the top of
 /// `init`. Without the declaration the function does not exist, so the
-/// facade cannot bind to an undeclared import.
+/// facade cannot bind to an undeclared import. The host verb carries only
+/// a level and a message, so an event's fields render into the message
+/// (`msg key=value ...`) and its target is dropped; spans are inert.
 ///
 /// # Client marker
 ///

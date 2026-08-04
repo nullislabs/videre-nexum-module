@@ -925,7 +925,9 @@ async fn e2e_logging_adapter_tracing_reaches_the_host_pipeline() {
     // component's world already gates at compile time. Boot with the
     // declaration omitted (the logging import is not capability-mapped on
     // the provider side); swap this for the fixture's own module.toml once
-    // nexum-runtime admits `logging` to PROVIDER_CAPABILITIES.
+    // nexum-runtime admits `logging` to PROVIDER_CAPABILITIES, tracked as
+    // nullislabs/nexum-runtime#76. Booting the fixture manifest today fails
+    // with `unknown capability "logging" in [capabilities]`.
     let dir = tempfile::tempdir().expect("tempdir");
     let manifest = dir.path().join("module.toml");
     std::fs::write(
@@ -969,9 +971,9 @@ optional = []
         "logging-venue boots alive"
     );
 
-    // `init` installed the facade and emitted one INFO and one WARN event;
-    // both must land as host-interface records at their own level, fields
-    // rendered in.
+    // `init` installed the facade, emitted one INFO and one WARN event
+    // carrying fields, then one bare probe per level. All must land as
+    // host-interface records at their own level, fields rendered in.
     let runs = logs.list_runs("logging-venue");
     assert_eq!(runs.len(), 1, "one run recorded for the adapter");
     let page = logs.read(&runs[0].run, 0);
@@ -1001,6 +1003,35 @@ optional = []
             .map(|r| (r.source, r.level, r.message.as_str()))
             .collect::<Vec<_>>(),
     );
+
+    // The whole level ladder the venue macro emits, one probe event per
+    // level: exactly one record per level, so a transposed arm (a level
+    // with no record) and a collapsed one (a level with two) both fail.
+    const LEVEL_PROBE: &str = "logging-venue level probe";
+    for level in [
+        tracing::Level::TRACE,
+        tracing::Level::DEBUG,
+        tracing::Level::INFO,
+        tracing::Level::WARN,
+        tracing::Level::ERROR,
+    ] {
+        let seen = page
+            .records
+            .iter()
+            .filter(|r| {
+                r.source == LogSource::HostInterface && r.level == level && r.message == LEVEL_PROBE
+            })
+            .count();
+        assert_eq!(
+            seen,
+            1,
+            "expected exactly one {level} level probe; records were: {:?}",
+            page.records
+                .iter()
+                .map(|r| (r.source, r.level, r.message.as_str()))
+                .collect::<Vec<_>>(),
+        );
+    }
 }
 
 // ── venue-adapter trap recovery ───────────────────────────────────────
