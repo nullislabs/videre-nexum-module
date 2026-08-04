@@ -42,8 +42,15 @@ const VENUE_KIND: &str = "venue-adapter";
 /// and the SDK export codegen. The world remaps the `videre` and
 /// `nexum:host` types onto the SDK bindings, so the impl speaks `videre_sdk`
 /// types directly. A capability outside the venue-permitted set (`chain`,
-/// `messaging`, `http`) is rejected at expansion. The consuming crate must
-/// declare `wit-bindgen` and `videre-sdk` as direct dependencies.
+/// `messaging`, `http`, `logging`) is rejected at expansion. The
+/// consuming crate must declare `wit-bindgen` and `videre-sdk` as direct
+/// dependencies.
+///
+/// With `logging` declared, the expansion also emits `install_tracing`,
+/// binding the standard `nexum_sdk` tracing facade (and panic hook) to the
+/// adapter's `nexum:host/logging` import; call it once at the top of
+/// `init`. Without the declaration the function does not exist, so the
+/// facade cannot bind to an undeclared import.
 ///
 /// # Client marker
 ///
@@ -118,6 +125,45 @@ pub fn venue(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     };
     let inline_world = &venue_world.wit;
+    // The guest tracing-facade glue rides the declared `logging`
+    // capability's adapter ident, mirroring how the module glue selects
+    // its host-adapter pieces. The venue world remaps `nexum:host/types`
+    // onto the SDK bindings, so `nexum_sdk`'s own bindgen glue (whose
+    // fault conversions must be local to the emitting crate) cannot be
+    // reused here; only the logging slice is emitted, over the crate's
+    // freshly generated `nexum::host::logging` module.
+    let logging_glue = venue_world.adapters.contains(&"logging").then(|| {
+        quote! {
+            /// Routes guest `tracing` events to the adapter's
+            /// `nexum:host/logging` import.
+            #[doc(hidden)]
+            struct __VidereHostLogSink;
+
+            impl ::videre_sdk::nexum_sdk::tracing::LogSink for __VidereHostLogSink {
+                fn log(&self, level: ::videre_sdk::nexum_sdk::Level, message: &str) {
+                    let level = if level == ::videre_sdk::nexum_sdk::Level::ERROR {
+                        nexum::host::logging::Level::Error
+                    } else if level == ::videre_sdk::nexum_sdk::Level::WARN {
+                        nexum::host::logging::Level::Warn
+                    } else if level == ::videre_sdk::nexum_sdk::Level::INFO {
+                        nexum::host::logging::Level::Info
+                    } else if level == ::videre_sdk::nexum_sdk::Level::DEBUG {
+                        nexum::host::logging::Level::Debug
+                    } else {
+                        nexum::host::logging::Level::Trace
+                    };
+                    nexum::host::logging::log(level, message);
+                }
+            }
+
+            /// Install the guest tracing facade and panic hook over the
+            /// adapter's host logging import. Call once at the top of
+            /// `init`.
+            fn install_tracing() {
+                ::videre_sdk::nexum_sdk::tracing::init(__VidereHostLogSink);
+            }
+        }
+    });
 
     quote! {
         // Anchor a rebuild on the manifest: the emitted world is derived
@@ -136,6 +182,8 @@ pub fn venue(attr: TokenStream, item: TokenStream) -> TokenStream {
                     ::videre_sdk::bindings::videre::value_flow::types,
             },
         });
+
+        #logging_glue
 
         #input
 

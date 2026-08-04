@@ -1,0 +1,20 @@
+# logging-venue adapter manifest - the logging-capability test fixture.
+# Declares logging alone, so the per-component world the macro derives
+# imports nexum:host/logging and nothing else.
+
+[module]
+name = "logging-venue"
+version = "0.1.0"
+kind = "venue-adapter"
+# Placeholder content hash; parsed but not verified in 0.2.
+component = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[capabilities]
+required = ["logging"]
+optional = []
+
+[capabilities.http]
+allow = []
+
+[config]
+name = "logging-venue"

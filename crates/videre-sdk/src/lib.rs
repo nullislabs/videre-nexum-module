@@ -28,6 +28,11 @@ pub mod faults;
 pub mod keeper;
 pub mod transport;
 
+/// The host-neutral module SDK this crate builds on, re-exported so the
+/// macro-emitted glue (the logging facade) reaches it without a direct
+/// dependency in the adapter crate.
+pub use nexum_sdk;
+
 pub use adapter::VenueAdapter;
 pub use body::{BodyError, IntentBody};
 pub use client::{

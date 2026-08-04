@@ -1,0 +1,20 @@
+[package]
+name = "logging-venue"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Venue adapter fixture declaring the logging capability: installs the standard tracing facade in init and emits structured events, so the platform tests can assert guest tracing reaches the host log pipeline with level and fields intact."
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# Event macros only; the facade dispatches through tracing-core, so the
+# host-oriented default features stay off, as in the module-world guests.
+tracing = { version = "0.1", default-features = false }
+videre-sdk = { path = "../../../crates/videre-sdk" }
+wit-bindgen = { version = "0.59", default-features = false, features = ["macros", "realloc"] }

@@ -2968,6 +2968,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
+name = "logging-venue"
+version = "0.1.0"
+dependencies = [
+ "tracing",
+ "videre-sdk",
+ "wit-bindgen 0.59.0",
+]
+
+[[package]]
 name = "loom"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

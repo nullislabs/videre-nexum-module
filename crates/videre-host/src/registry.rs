@@ -785,13 +785,18 @@ impl<T: RuntimeTypes> ProviderKind<T> for VenueAdapterKind {
     }
 
     fn link(&self, linker: &mut wasmtime::component::Linker<HostState<T>>) -> anyhow::Result<()> {
-        // The scoped transport only; the WASI base is the host's, and the
-        // withheld core interfaces fail instantiation.
+        // The scoped transport plus logging; the WASI base is the host's,
+        // and the withheld core interfaces (local-store, remote-store,
+        // identity) fail instantiation. Unconditional here, gated per
+        // adapter by the declared world, same as chain and messaging.
         nexum::host::chain::add_to_linker::<HostState<T>, HasSelf<HostState<T>>>(linker, |s| s)?;
         nexum::host::messaging::add_to_linker::<HostState<T>, HasSelf<HostState<T>>>(
             linker,
             |s| s,
         )?;
+        // The module-world host implementation, levels intact: guest log
+        // calls land on the same `LogRouter` records as every worker.
+        nexum::host::logging::add_to_linker::<HostState<T>, HasSelf<HostState<T>>>(linker, |s| s)?;
         Ok(())
     }
 

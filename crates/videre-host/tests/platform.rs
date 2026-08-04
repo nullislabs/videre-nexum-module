@@ -160,13 +160,57 @@ fn e2e_echo_venue_component_imports_equal_declared_capabilities() {
     );
 }
 
-/// The venue-adapter provider linker binds only the scoped transport and
-/// withholds the core-only interfaces, without a duplicate-definition clash.
+/// The venue-adapter provider linker binds the scoped transport plus
+/// logging and withholds the core-only interfaces, without a
+/// duplicate-definition clash.
 #[tokio::test]
 async fn provider_linker_assembles_with_scoped_transport() {
     let engine = make_wasmtime_engine();
     build_provider_linker::<MockTypes>(&engine, &VenueAdapterKind)
         .expect("provider linker assembles");
+}
+
+/// An adapter declaring `logging` imports `nexum:host/logging` and nothing
+/// else capability-bearing; the withheld core interfaces stay out.
+#[test]
+fn e2e_logging_venue_component_imports_logging_when_declared() {
+    let Some(wasm) = module_wasm_or_skip("logging-venue") else {
+        return;
+    };
+    let engine = make_wasmtime_engine();
+    let component = wasmtime::component::Component::from_file(&engine, &wasm).expect("compile");
+    let imports: Vec<String> = component
+        .component_type()
+        .imports(&engine)
+        .map(|(name, _)| name.to_owned())
+        .collect();
+
+    let registry = CapabilityRegistry::core();
+    let caps: std::collections::BTreeSet<&str> = imports
+        .iter()
+        .filter_map(|name| registry.wit_import_to_cap(name))
+        .collect();
+    assert_eq!(
+        caps,
+        std::collections::BTreeSet::from(["logging"]),
+        "imports were: {imports:?}"
+    );
+    assert!(
+        imports
+            .iter()
+            .any(|name| name.starts_with("nexum:host/logging")),
+        "imports were: {imports:?}"
+    );
+    // Declared opt-in only: no transport leaks in beside it, and the
+    // structurally refused core interfaces stay out.
+    assert!(
+        imports.iter().all(|name| !name.contains("chain")
+            && !name.contains("messaging")
+            && !name.contains("local-store")
+            && !name.contains("remote-store")
+            && !name.contains("identity")),
+        "imports were: {imports:?}"
+    );
 }
 
 // ── intent-status subscription E2E ────────────────────────────────────
@@ -859,6 +903,103 @@ body_versions = [1]
     assert!(
         chain.contains("[module].name is missing or blank"),
         "{chain}"
+    );
+}
+
+// ── venue logging capability ──────────────────────────────────────────
+
+/// A logging-declaring adapter's `tracing` events reach the host log
+/// pipeline as host-interface records with each event's own level and its
+/// structured fields intact: the stderr-sink workaround's signature (every
+/// line a WARN stderr record) must not be the carrier.
+#[tokio::test]
+async fn e2e_logging_adapter_tracing_reaches_the_host_pipeline() {
+    use nexum_runtime::host::logs::LogSource;
+
+    let Some(wasm) = module_wasm_or_skip("logging-venue") else {
+        return;
+    };
+    // The runtime pin validates a provider manifest against its
+    // scoped-transport capability registry, which does not carry a
+    // `logging` row yet, so the boot manifest cannot declare what the
+    // component's world already gates at compile time. Boot with the
+    // declaration omitted (the logging import is not capability-mapped on
+    // the provider side); swap this for the fixture's own module.toml once
+    // nexum-runtime admits `logging` to PROVIDER_CAPABILITIES.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let manifest = dir.path().join("module.toml");
+    std::fs::write(
+        &manifest,
+        r#"
+[module]
+name = "logging-venue"
+version = "0.1.0"
+kind = "venue-adapter"
+component = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[capabilities]
+required = []
+optional = []
+"#,
+    )
+    .expect("write boot manifest");
+
+    let components = mock_components();
+    let logs = components.logs.clone();
+    let engine = make_wasmtime_engine();
+    let config = EngineConfig {
+        adapters: vec![AdapterEntry {
+            path: wasm,
+            manifest: Some(manifest),
+            http_allow: Vec::new(),
+            messaging_topics: Vec::new(),
+        }],
+        ..Default::default()
+    };
+    let videre = Arc::new(platform(&config));
+    let extensions = videre_assembly(&videre);
+    let linker = make_linker(&engine, &extensions);
+
+    let supervisor = Supervisor::boot(&engine, &linker, &config, &components, &extensions, None)
+        .await
+        .expect("boot");
+    assert_eq!(
+        supervisor.adapter_alive_count(),
+        1,
+        "logging-venue boots alive"
+    );
+
+    // `init` installed the facade and emitted one INFO and one WARN event;
+    // both must land as host-interface records at their own level, fields
+    // rendered in.
+    let runs = logs.list_runs("logging-venue");
+    assert_eq!(runs.len(), 1, "one run recorded for the adapter");
+    let page = logs.read(&runs[0].run, 0);
+    let record_at = |level: tracing::Level, needle: &str| {
+        page.records.iter().find(|r| {
+            r.source == LogSource::HostInterface && r.level == level && r.message.contains(needle)
+        })
+    };
+    let info = record_at(tracing::Level::INFO, "logging-venue facade installed");
+    assert!(
+        info.is_some(),
+        "INFO facade record missing; records were: {:?}",
+        page.records
+            .iter()
+            .map(|r| (r.source, r.level, r.message.as_str()))
+            .collect::<Vec<_>>(),
+    );
+    assert!(
+        info.expect("info record").message.contains("flow=init"),
+        "the structured field must survive to the host record",
+    );
+    assert!(
+        record_at(tracing::Level::WARN, "logging-venue config sighted").is_some(),
+        "WARN record missing at its own level; records were: {:?}",
+        page.records
+            .iter()
+            .map(|r| (r.source, r.level, r.message.as_str()))
+            .collect::<Vec<_>>(),
     );
 }
 
