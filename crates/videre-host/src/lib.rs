@@ -29,8 +29,8 @@ use videre_status_body::INTENT_STATUS_KIND;
 use wasmtime::component::{HasSelf, Linker};
 
 pub use registry::{
-    DuplicateVenue, EgressGuard, GuardContext, GuardVerdict, IntentStatusUpdate, VenueActor,
-    VenueAdapterKind, VenueId, VenueInvoker, VenueRegistry, VenueRegistryBuilder,
+    DuplicateVenue, EgressGuard, GuardContext, GuardVerdict, IntentStatusUpdate, InvalidVenueId,
+    VenueActor, VenueAdapterKind, VenueId, VenueInvoker, VenueRegistry, VenueRegistryBuilder,
 };
 
 /// Status-poll channel buffer.

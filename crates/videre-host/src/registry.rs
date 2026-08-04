@@ -9,7 +9,6 @@
 //! calling module, so a caller feeding garbage exhausts its own budget.
 
 use std::collections::{HashMap, VecDeque};
-use std::fmt;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -37,32 +36,40 @@ use crate::bindings::{
     IntentHeader, IntentStatus, Quotation, RateLimit, SubmitOutcome, VenueAdapter, VenueError,
 };
 
-/// Venue identifier an adapter registers under. Opaque beyond equality.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub struct VenueId(String);
+/// Venue identifier an adapter registers under. Opaque beyond equality,
+/// never empty or whitespace-only: the field is private and [`VenueId::new`]
+/// is the only constructor, so every id in the process is validated.
+#[derive(
+    Clone, Debug, Eq, Hash, PartialEq, derive_more::AsRef, derive_more::Display, derive_more::Into,
+)]
+pub struct VenueId(#[as_ref(str)] String);
+
+/// A candidate venue id failed validation at a boundary.
+#[derive(Debug, thiserror::Error)]
+#[error("venue id must not be empty or whitespace-only (got {0:?})")]
+pub struct InvalidVenueId(String);
 
 impl VenueId {
+    /// Validating constructor: rejects empty or whitespace-only input.
+    pub fn new(id: impl Into<String>) -> Result<Self, InvalidVenueId> {
+        let id = id.into();
+        if id.trim().is_empty() {
+            return Err(InvalidVenueId(id));
+        }
+        Ok(Self(id))
+    }
+
     /// The id at its wire spelling.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
-impl From<String> for VenueId {
-    fn from(id: String) -> Self {
-        Self(id)
-    }
-}
+impl std::str::FromStr for VenueId {
+    type Err = InvalidVenueId;
 
-impl From<&str> for VenueId {
-    fn from(id: &str) -> Self {
-        Self(id.to_owned())
-    }
-}
-
-impl fmt::Display for VenueId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::new(s)
     }
 }
 
@@ -663,12 +670,20 @@ impl<T: RuntimeTypes> ProviderKind<T> for VenueAdapterKind {
             fuel_per_call,
             liveness,
         } = instance;
+        // The venue id is the adapter's namespace: its manifest name.
+        // Checked before instantiating, so a blank name never runs the
+        // guest. An empty name cannot reach here: the runtime substitutes
+        // its own fallback namespace, so only whitespace-only fails.
+        let venue_id = store
+            .data()
+            .run
+            .module
+            .parse::<VenueId>()
+            .context("adapter venue id")?;
         let bindings = VenueAdapter::instantiate_async(&mut store, component, linker)
             .await
             .map_err(anyhow::Error::from)
             .context("instantiate adapter")?;
-        // The venue id is the adapter's namespace: its manifest name.
-        let venue_id = VenueId::from(&*store.data().run.module);
         // The manifest `[venue] body_versions` is the install-time
         // authority the keeper handshake reads; the export must agree,
         // so a manifest claiming versions the code does not decode never
@@ -822,7 +837,12 @@ mod tests {
 
     /// The venue id every test installs its stub adapter under.
     fn cow() -> VenueId {
-        VenueId::from("cow")
+        "cow".parse().expect("valid venue id")
+    }
+
+    /// A venue id no test ever installs.
+    fn unlisted() -> VenueId {
+        "unlisted".parse().expect("valid venue id")
     }
 
     /// Decode an update's opaque status body.
@@ -1049,7 +1069,7 @@ mod tests {
         );
 
         let err = registry
-            .submit("mod-a", &VenueId::from("unlisted"), b"body".to_vec())
+            .submit("mod-a", &unlisted(), b"body".to_vec())
             .await
             .expect_err("unknown venue rejected");
 
@@ -1163,9 +1183,7 @@ mod tests {
         );
 
         assert!(matches!(
-            registry
-                .quote("mod-a", &VenueId::from("unlisted"), b"b".to_vec())
-                .await,
+            registry.quote("mod-a", &unlisted(), b"b".to_vec()).await,
             Err(VenueError::UnknownVenue)
         ));
         assert_eq!(calls.quote.load(Ordering::SeqCst), 0);
@@ -1316,6 +1334,22 @@ mod tests {
     }
 
     #[test]
+    fn blank_venue_id_is_rejected_at_construction() {
+        assert!("".parse::<VenueId>().is_err());
+        assert!("  ".parse::<VenueId>().is_err());
+        assert!(VenueId::new("\t\n").is_err());
+        assert_eq!("cow".parse::<VenueId>().expect("parses").as_str(), "cow");
+        // `:` stays legal for the future chain-qualified shape.
+        assert_eq!(
+            "cow:11155111".parse::<VenueId>().expect("parses").as_str(),
+            "cow:11155111"
+        );
+        assert_eq!(VenueId::new("cow").expect("constructs").to_string(), "cow");
+        // The derived accessor is `AsRef<str>`, matching the SDK id.
+        assert_eq!(AsRef::<str>::as_ref(&cow()), "cow");
+    }
+
+    #[test]
     fn duplicate_venue_id_is_rejected() {
         let registry = VenueRegistryBuilder::new(SubmitQuota::default()).build();
         let a = Arc::new(StubCalls::default());
@@ -1346,9 +1380,7 @@ mod tests {
             Err(VenueError::Unavailable(_))
         ));
         assert!(matches!(
-            registry
-                .submit("mod-a", &VenueId::from("unlisted"), b"b".to_vec())
-                .await,
+            registry.submit("mod-a", &unlisted(), b"b".to_vec()).await,
             Err(VenueError::UnknownVenue)
         ));
         assert_eq!(calls.derive.load(Ordering::SeqCst), 0);
@@ -1449,7 +1481,7 @@ mod tests {
             StubAdapter::new(Arc::new(StubCalls::default())),
         );
         assert!(matches!(
-            registry.observe(&VenueId::from("unlisted"), b"r".to_vec()),
+            registry.observe(&unlisted(), b"r".to_vec()),
             Err(VenueError::UnknownVenue)
         ));
         assert_eq!(registry.watched_count(), 0);

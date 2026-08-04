@@ -43,6 +43,11 @@ fn workspace_path(relative: &str) -> PathBuf {
         .join(relative)
 }
 
+/// A test venue id, parsed through the validating boundary.
+fn venue(id: &str) -> VenueId {
+    id.parse().expect("valid venue id")
+}
+
 /// Path to a module's `.wasm` artefact under the workspace target dir,
 /// or `None` with a skip message when it is not built.
 fn module_wasm_or_skip(module_name: &str) -> Option<PathBuf> {
@@ -231,7 +236,7 @@ fn scripted_registry(adapter: ScriptedAdapter) -> VenueRegistry {
     let registry = VenueRegistryBuilder::new(Default::default()).build();
     registry
         .install_for_test(
-            VenueId::from("cow"),
+            venue("cow"),
             nexum_runtime::host::actor::Liveness::default(),
             adapter,
         )
@@ -327,7 +332,7 @@ async fn e2e_intent_status_subscription_receives_polled_transitions() {
     // The registry watches the receipt of an accepted submission and polls
     // the adapter's status export; each poll here observes a transition.
     registry
-        .submit("test-caller", &VenueId::from("cow"), b"body".to_vec())
+        .submit("test-caller", &venue("cow"), b"body".to_vec())
         .await
         .expect("submit");
 
@@ -398,7 +403,7 @@ async fn e2e_intent_status_flows_through_the_event_loop() {
     .expect("boot_single");
 
     registry
-        .submit("test-caller", &VenueId::from("cow"), b"body".to_vec())
+        .submit("test-caller", &venue("cow"), b"body".to_vec())
         .await
         .expect("submit");
 
@@ -801,6 +806,59 @@ body_versions = [1, 2]
     assert!(chain.contains("declares {1, 2}"), "{chain}");
 }
 
+/// An adapter whose manifest name is whitespace-only fails install at the
+/// venue-id boundary instead of registering a blank venue id.
+#[tokio::test]
+async fn e2e_blank_manifest_name_refuses_the_adapter_at_boot() {
+    let Some(adapter_wasm) = module_wasm_or_skip("echo-venue") else {
+        return;
+    };
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let adapter_manifest = dir.path().join("echo-venue.toml");
+    std::fs::write(
+        &adapter_manifest,
+        r#"
+[module]
+name = "  "
+kind = "venue-adapter"
+
+[capabilities]
+required = ["chain"]
+
+[venue]
+body_versions = [1]
+"#,
+    )
+    .expect("write adapter manifest");
+
+    let engine = make_wasmtime_engine();
+    let config = EngineConfig {
+        adapters: vec![AdapterEntry {
+            path: adapter_wasm,
+            manifest: Some(adapter_manifest),
+            http_allow: Vec::new(),
+            messaging_topics: Vec::new(),
+        }],
+        ..Default::default()
+    };
+    let videre = Arc::new(platform(&config));
+    let extensions = videre_assembly(&videre);
+    let linker = make_linker(&engine, &extensions);
+    let components = mock_components();
+
+    let Err(err) =
+        Supervisor::boot(&engine, &linker, &config, &components, &extensions, None).await
+    else {
+        panic!("a blank-named adapter must refuse to boot");
+    };
+    let chain = format!("{err:#}");
+    assert!(
+        chain.contains("venue id must not be empty or whitespace-only"),
+        "{chain}"
+    );
+}
+
 // ── venue-adapter trap recovery ───────────────────────────────────────
 
 /// Boot one flaky-venue adapter over the mock chain, its head at the
@@ -845,12 +903,12 @@ async fn e2e_trapped_adapter_is_swept_and_restarts() {
     assert_eq!(supervisor.adapter_count(), 1);
     assert_eq!(supervisor.adapter_alive_count(), 1, "boots alive");
     let registry = registry_of(&supervisor);
-    let venue = VenueId::from("flaky-venue");
+    let flaky = venue("flaky-venue");
 
     // The poison head detonates submit: the guest panic traps the store
     // and the shared liveness drops.
     let err = registry
-        .submit("mod-a", &venue, b"body".to_vec())
+        .submit("mod-a", &flaky, b"body".to_vec())
         .await
         .expect_err("the poison head traps the adapter");
     assert!(matches!(err, VenueError::Unavailable(_)), "{err:?}");
@@ -862,12 +920,12 @@ async fn e2e_trapped_adapter_is_swept_and_restarts() {
 
     // Temporarily dead resolves distinctly from never installed.
     assert!(matches!(
-        registry.submit("mod-a", &venue, b"body".to_vec()).await,
+        registry.submit("mod-a", &flaky, b"body".to_vec()).await,
         Err(VenueError::Unavailable(_))
     ));
     assert!(matches!(
         registry
-            .submit("mod-a", &VenueId::from("unlisted"), b"body".to_vec())
+            .submit("mod-a", &venue("unlisted"), b"body".to_vec())
             .await,
         Err(VenueError::UnknownVenue)
     ));
@@ -879,7 +937,7 @@ async fn e2e_trapped_adapter_is_swept_and_restarts() {
     supervisor.dispatch_block(block(1)).await;
     assert_eq!(supervisor.adapter_alive_count(), 1, "the sweep revived it");
     let outcome = registry
-        .submit("mod-a", &venue, b"body".to_vec())
+        .submit("mod-a", &flaky, b"body".to_vec())
         .await
         .expect("the recovered adapter accepts");
     assert!(matches!(outcome, SubmitOutcome::Accepted(r) if r == b"body"));
@@ -903,17 +961,17 @@ async fn e2e_crash_looping_adapter_is_poisoned() {
     // submit after a restart traps again.
     let (mut supervisor, _chain) = boot_flaky_venue(wasm, limits).await;
     let registry = registry_of(&supervisor);
-    let venue = VenueId::from("flaky-venue");
+    let flaky = venue("flaky-venue");
 
     // Trap 1, then a successful restart past the 1s backoff.
-    let _ = registry.submit("mod-a", &venue, b"body".to_vec()).await;
+    let _ = registry.submit("mod-a", &flaky, b"body".to_vec()).await;
     tokio::time::sleep(Duration::from_millis(1_200)).await;
     supervisor.dispatch_block(block(1)).await;
     assert_eq!(supervisor.adapter_alive_count(), 1, "first restart lands");
 
     // Trap 2 crosses the 2-failure threshold: the sweep quarantines the
     // adapter instead of scheduling another restart.
-    let _ = registry.submit("mod-a", &venue, b"body".to_vec()).await;
+    let _ = registry.submit("mod-a", &flaky, b"body".to_vec()).await;
     supervisor.dispatch_block(block(1)).await;
     assert_eq!(supervisor.adapter_alive_count(), 0, "quarantined");
 
@@ -926,7 +984,7 @@ async fn e2e_crash_looping_adapter_is_poisoned() {
         "no restart while poisoned"
     );
     assert!(matches!(
-        registry.submit("mod-a", &venue, b"body".to_vec()).await,
+        registry.submit("mod-a", &flaky, b"body".to_vec()).await,
         Err(VenueError::Unavailable(_))
     ));
 }
