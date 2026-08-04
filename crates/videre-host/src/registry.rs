@@ -37,11 +37,12 @@ use crate::bindings::{
 };
 
 /// Venue identifier an adapter registers under. Opaque beyond equality,
-/// never empty or whitespace-only.
+/// never empty or whitespace-only: the field is private and [`VenueId::new`]
+/// is the only constructor, so every id in the process is validated.
 #[derive(
     Clone, Debug, Eq, Hash, PartialEq, derive_more::AsRef, derive_more::Display, derive_more::Into,
 )]
-pub struct VenueId(String);
+pub struct VenueId(#[as_ref(str)] String);
 
 /// A candidate venue id failed validation at a boundary.
 #[derive(Debug, thiserror::Error)]
@@ -669,18 +670,20 @@ impl<T: RuntimeTypes> ProviderKind<T> for VenueAdapterKind {
             fuel_per_call,
             liveness,
         } = instance;
-        let bindings = VenueAdapter::instantiate_async(&mut store, component, linker)
-            .await
-            .map_err(anyhow::Error::from)
-            .context("instantiate adapter")?;
-        // The venue id is the adapter's namespace: its manifest name. A
-        // blank name fails install here rather than registering an empty id.
+        // The venue id is the adapter's namespace: its manifest name.
+        // Checked before instantiating, so a blank name never runs the
+        // guest. An empty name cannot reach here: the runtime substitutes
+        // its own fallback namespace, so only whitespace-only fails.
         let venue_id = store
             .data()
             .run
             .module
             .parse::<VenueId>()
             .context("adapter venue id")?;
+        let bindings = VenueAdapter::instantiate_async(&mut store, component, linker)
+            .await
+            .map_err(anyhow::Error::from)
+            .context("instantiate adapter")?;
         // The manifest `[venue] body_versions` is the install-time
         // authority the keeper handshake reads; the export must agree,
         // so a manifest claiming versions the code does not decode never
@@ -1342,6 +1345,8 @@ mod tests {
             "cow:11155111"
         );
         assert_eq!(VenueId::new("cow").expect("constructs").to_string(), "cow");
+        // The derived accessor is `AsRef<str>`, matching the SDK id.
+        assert_eq!(AsRef::<str>::as_ref(&cow()), "cow");
     }
 
     #[test]

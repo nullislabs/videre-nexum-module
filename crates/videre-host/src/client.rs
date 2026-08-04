@@ -60,10 +60,11 @@ impl<T: RuntimeTypes> Host for HostState<T> {
 mod tests {
     use super::*;
 
-    /// The seam every `Host` method routes the wire venue id through: a
-    /// blank id fails typedly instead of resolving to a venue.
+    /// The seam every `Host` method routes the wire venue id through. The
+    /// `VenueId` field is private to `registry`, so no method here can
+    /// build one that skipped this check.
     #[test]
-    fn blank_venue_submit_is_unknown_at_the_host_import() {
+    fn a_blank_wire_venue_id_is_unknown_venue() {
         assert!(matches!(
             venue_id(String::new()),
             Err(VenueError::UnknownVenue)
