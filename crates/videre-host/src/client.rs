@@ -20,21 +20,27 @@ fn registry<T: RuntimeTypes>(state: &HostState<T>) -> Result<Arc<VenueRegistry>,
         .ok_or(VenueError::UnknownVenue)
 }
 
+/// Validate the wire venue id at the host import. A blank id can never be
+/// installed, so it is `unknown-venue`, not a resolvable venue.
+fn venue_id(venue: String) -> Result<VenueId, VenueError> {
+    VenueId::new(venue).map_err(|_| VenueError::UnknownVenue)
+}
+
 impl<T: RuntimeTypes> Host for HostState<T> {
     async fn quote(&mut self, venue: String, body: Vec<u8>) -> Result<Quotation, VenueError> {
         registry(self)?
-            .quote(&self.run.module, &VenueId::from(venue), body)
+            .quote(&self.run.module, &venue_id(venue)?, body)
             .await
     }
 
     async fn submit(&mut self, venue: String, body: Vec<u8>) -> Result<SubmitOutcome, VenueError> {
         registry(self)?
-            .submit(&self.run.module, &VenueId::from(venue), body)
+            .submit(&self.run.module, &venue_id(venue)?, body)
             .await
     }
 
     async fn observe(&mut self, venue: String, receipt: Vec<u8>) -> Result<(), VenueError> {
-        registry(self)?.observe(&VenueId::from(venue), receipt)
+        registry(self)?.observe(&venue_id(venue)?, receipt)
     }
 
     async fn status(
@@ -42,10 +48,30 @@ impl<T: RuntimeTypes> Host for HostState<T> {
         venue: String,
         receipt: Vec<u8>,
     ) -> Result<IntentStatus, VenueError> {
-        registry(self)?.status(&VenueId::from(venue), receipt).await
+        registry(self)?.status(&venue_id(venue)?, receipt).await
     }
 
     async fn cancel(&mut self, venue: String, receipt: Vec<u8>) -> Result<(), VenueError> {
-        registry(self)?.cancel(&VenueId::from(venue), receipt).await
+        registry(self)?.cancel(&venue_id(venue)?, receipt).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The seam every `Host` method routes the wire venue id through: a
+    /// blank id fails typedly instead of resolving to a venue.
+    #[test]
+    fn blank_venue_submit_is_unknown_at_the_host_import() {
+        assert!(matches!(
+            venue_id(String::new()),
+            Err(VenueError::UnknownVenue)
+        ));
+        assert!(matches!(
+            venue_id("  ".to_owned()),
+            Err(VenueError::UnknownVenue)
+        ));
+        assert_eq!(venue_id("cow".to_owned()).expect("parses").as_str(), "cow");
     }
 }

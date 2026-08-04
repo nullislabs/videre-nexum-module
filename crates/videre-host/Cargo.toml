@@ -18,6 +18,7 @@ videre-status-body = { path = "../videre-status-body" }
 
 wasmtime.workspace = true
 anyhow.workspace = true
+derive_more.workspace = true
 thiserror.workspace = true
 async-trait.workspace = true
 futures.workspace = true
