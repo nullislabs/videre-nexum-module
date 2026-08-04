@@ -48,7 +48,8 @@ The integration tests load the module wasms from `target/wasm32-wasip2/release/`
 The hooks in `.claude/hooks/` support this loop: `rustfmt-on-edit.sh` formats each edited `.rs` file.
 `nextest-on-stop.sh` runs nextest at the end of a turn, for the crates that own the changed `.rs` files.
 `content-lint.sh` blocks an edit that adds an em-dash to a `.rs` or `.md` file.
-Each hook exits without an effect when its tool is absent, so the hooks do nothing outside the dev shell.
+The hooks run only on NixOS: each one exits at once when `/etc/NIXOS` is absent.
+Each hook also exits without an effect when its tool is absent, so the hooks do nothing outside the dev shell.
 
 ## Repo boundary
 
