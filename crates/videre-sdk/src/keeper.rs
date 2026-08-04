@@ -10,8 +10,17 @@ use nexum_sdk::keeper::{
 };
 use nexum_sdk::prelude::{hex, keccak256};
 
-use crate::client::{VenueId, VenueTransport};
+use crate::client::{Venue, VenueId, VenueTransport};
 use crate::{SubmitOutcome, UnsignedTx, VenueFault};
+
+/// A venue's denial classification as the keeper carries it: folds a
+/// `denied` detail into a [`RetryAction`]. Sourced from
+/// [`Venue::classify_denied`]; a plain `fn` pointer, so [`Keeper`] and
+/// [`reconcile`] stay non-generic over the venue.
+pub type DenialClassifier = fn(&str) -> RetryAction;
+
+/// The default classification: every denial drops.
+const DROP_DENIED: DenialClassifier = |_| RetryAction::Drop;
 
 /// What one poll asks the run to do with its watch.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -41,18 +50,37 @@ pub struct Keeper<S, P> {
     venues: P,
     venue: VenueId,
     max_per_tick: usize,
+    classify: DenialClassifier,
 }
 
 impl<S, P> Keeper<S, P> {
     /// Bind a source to the venue id its submissions route to. The
-    /// reconcile budget defaults to [`DEFAULT_RECONCILE_BUDGET`].
+    /// reconcile budget defaults to [`DEFAULT_RECONCILE_BUDGET`], and
+    /// denial classification to the coarse every-denial-drops mapping.
     pub fn new(source: S, venues: P, venue: impl Into<VenueId>) -> Self {
         Self {
             source,
             venues,
             venue: venue.into(),
             max_per_tick: DEFAULT_RECONCILE_BUDGET,
+            classify: DROP_DENIED,
         }
+    }
+
+    /// Bind a source to the venue marker `V`: the id and the denial
+    /// classification both come from `V`, so a keeper cannot route to one
+    /// venue while folding another's denials.
+    pub fn for_venue<V: Venue>(source: S, venues: P) -> Self {
+        Self::new(source, venues, V::ID.clone()).with_classifier(V::classify_denied)
+    }
+
+    /// Adopt a venue's denial classification, normally the bound
+    /// marker's. Prefer [`Keeper::for_venue`], which takes both the id
+    /// and the classification from the marker and cannot disagree.
+    #[must_use]
+    pub fn with_classifier(mut self, classify: DenialClassifier) -> Self {
+        self.classify = classify;
+        self
     }
 
     /// Override the per-tick reconcile budget (`[limits.reconcile]`
@@ -95,7 +123,15 @@ impl<S, P: VenueTransport> Keeper<S, P> {
         let journal = Journal::submitted(host);
         let mut report = RunReport::default();
 
-        let rec = reconcile(&self.venue, &self.venues, &journal, tick, self.max_per_tick).await?;
+        let rec = reconcile(
+            &self.venue,
+            &self.venues,
+            &journal,
+            tick,
+            self.max_per_tick,
+            self.classify,
+        )
+        .await?;
         report.reconciled_committed = rec.committed;
         report.reconciled_released = rec.released;
         report.reconciled_pending = rec.pending;
@@ -162,7 +198,7 @@ impl<S, P: VenueTransport> Keeper<S, P> {
                                 // the reserve, then fold the refusal.
                                 Err(fault) => {
                                     journal.release(&key)?;
-                                    retry_action(&fault)
+                                    retry_action_with(&fault, self.classify)
                                 }
                             }
                         }
@@ -190,7 +226,10 @@ impl<S, P: VenueTransport> Keeper<S, P> {
 /// - `next_eligible > tick.epoch_s`: still backing off, left untouched.
 /// - accepted: committed.
 /// - `requires-signing`: released, the tx surfaced to the caller.
-/// - terminal refusal (a [`RetryAction::Drop`] fault): released.
+/// - drop-class refusal under `classify` ([`RetryAction::Drop`] or
+///   [`RetryAction::DropOnRepeat`]): released. A denial the venue softens
+///   to `DropOnRepeat` still releases here; its grace is the watch-level
+///   [`Retrier`] ledger, which the next tick's poll re-enters.
 /// - transient refusal: left `RESERVED` for the next tick; a rate-limit
 ///   hint re-parks `next_eligible`.
 pub async fn reconcile<H, P>(
@@ -199,6 +238,7 @@ pub async fn reconcile<H, P>(
     journal: &Journal<'_, H>,
     tick: &Tick,
     max_per_tick: usize,
+    classify: DenialClassifier,
 ) -> Result<ReconcileReport, Fault>
 where
     H: LocalStoreHost,
@@ -229,7 +269,7 @@ where
                 journal.release(&key)?;
                 report.unsigned.push(tx);
             }
-            Err(fault) if is_terminal(&fault) => {
+            Err(fault) if releases_reservation(&fault, classify) => {
                 journal.release(&key)?;
                 report.released += 1;
             }
@@ -247,10 +287,17 @@ where
     Ok(report)
 }
 
-/// A venue refusal no resubmit can cure: its [`retry_action`] drops the
-/// watch, so the reservation is safe to release.
-fn is_terminal(fault: &VenueFault) -> bool {
-    matches!(retry_action(fault), RetryAction::Drop)
+/// A venue refusal the reservation must not outlive: its
+/// [`retry_action_with`] under `classify` is drop-class, so the marker is
+/// safe to release. [`RetryAction::DropOnRepeat`] counts as drop-class
+/// because the grace is a watch-level ledger the [`Retrier`] keeps; the
+/// reconcile pass has no repeat counter, so holding the reservation would
+/// re-POST the same refused body every tick forever.
+fn releases_reservation(fault: &VenueFault, classify: DenialClassifier) -> bool {
+    matches!(
+        retry_action_with(fault, classify),
+        RetryAction::Drop | RetryAction::DropOnRepeat
+    )
 }
 
 /// One run's tally, by watch disposition.
@@ -268,9 +315,11 @@ pub struct RunReport {
     /// Bodies an earlier run journalled, skipped without a venue call.
     pub duplicates: usize,
     /// Watches left in place for a later tick, plus submit arms the
-    /// reconcile pass already owns this tick.
+    /// reconcile pass already owns this tick. Buckets follow the
+    /// [`RetryAction`], not the [`Retrier`] effect, so the repeat tick
+    /// that retires a [`RetryAction::DropOnRepeat`] watch counts here.
     pub retried: usize,
-    /// Watches dropped.
+    /// Watches a [`RetryAction::Drop`] removed.
     pub dropped: usize,
     /// Stranded reservations the reconcile pass committed this tick.
     pub reconciled_committed: usize,
@@ -315,8 +364,16 @@ pub fn submission_key(venue: &VenueId, body: &[u8]) -> String {
 
 /// Fold a venue refusal into a retry action: a throttle hint becomes an
 /// epoch gate, transient failures retry next block, and refusals no retry
-/// can cure drop the watch.
-pub fn retry_action(fault: &VenueFault) -> RetryAction {
+/// can cure drop the watch. The `denied` arm delegates to
+/// [`Venue::classify_denied`], so a venue-specific denial the marker
+/// classifies softer inherits its grace on the generic path.
+pub fn retry_action<V: Venue>(fault: &VenueFault) -> RetryAction {
+    retry_action_with(fault, V::classify_denied)
+}
+
+/// The non-generic core under [`retry_action`]: the `denied` detail
+/// folds through `classify`, every other arm is fixed.
+fn retry_action_with(fault: &VenueFault, classify: DenialClassifier) -> RetryAction {
     match fault {
         VenueFault::RateLimited {
             retry_after_ms: Some(ms),
@@ -328,10 +385,10 @@ pub fn retry_action(fault: &VenueFault) -> RetryAction {
         }
         | VenueFault::Timeout
         | VenueFault::Unavailable(_) => RetryAction::TryNextBlock,
+        VenueFault::Denied(detail) => classify(detail),
         VenueFault::UnknownVenue
         | VenueFault::InvalidBody(_)
         | VenueFault::Unsupported
-        | VenueFault::Denied(_)
         | VenueFault::InvalidReceipt
         | VenueFault::ReceiptMismatch => RetryAction::Drop,
     }
@@ -348,10 +405,10 @@ mod tests {
     use nexum_sdk_test::{MockLocalStore, TrapStore};
 
     use super::{
-        DEFAULT_RECONCILE_BUDGET, Keeper, Outcome, RunReport, is_terminal, reconcile,
-        submission_key,
+        DEFAULT_RECONCILE_BUDGET, DROP_DENIED, Keeper, Outcome, RetryAction, RunReport, reconcile,
+        releases_reservation, retry_action, submission_key,
     };
-    use crate::client::{VenueId, VenueTransport};
+    use crate::client::{Venue, VenueId, VenueTransport};
     use crate::{IntentStatus, Quotation, SubmitOutcome, UnsignedTx, VenueFault};
 
     /// Drive a run on the test's synchronous boundary.
@@ -1156,7 +1213,7 @@ mod tests {
                     }) => Disposition::Park {
                         until: tick.epoch_s.saturating_add(ms.div_ceil(1000)),
                     },
-                    Err(fault) if is_terminal(fault) => Disposition::Release,
+                    Err(fault) if releases_reservation(fault, DROP_DENIED) => Disposition::Release,
                     Err(_) => Disposition::Retain,
                 };
                 (disposition, outcome)
@@ -1202,6 +1259,7 @@ mod tests {
             &journal,
             &TICK,
             DEFAULT_RECONCILE_BUDGET,
+            DROP_DENIED,
         ))
         .expect("reconcile runs");
         assert_eq!(report.committed, 1);
@@ -1268,6 +1326,7 @@ mod tests {
             &journal,
             &TICK,
             DEFAULT_RECONCILE_BUDGET,
+            DROP_DENIED,
         ))
         .expect("reconcile runs");
         assert_eq!(report.gated, 1);
@@ -1285,6 +1344,7 @@ mod tests {
             &journal,
             &at_2,
             DEFAULT_RECONCILE_BUDGET,
+            DROP_DENIED,
         ))
         .expect("reconcile runs");
         assert_eq!(report.committed, 1);
@@ -1305,5 +1365,213 @@ mod tests {
         let out = run(guarded_submit(&journal, &venue, b"order", &TICK)).expect("guard runs");
         assert!(matches!(out, Guarded::Skipped(Mark::Reserved)));
         assert_eq!(venue.post_count(), 1);
+    }
+
+    /// Marker-only body: the keeper path never exercises the codec.
+    struct NullBody;
+
+    impl crate::body::__private::Derived for NullBody {}
+
+    impl crate::IntentBody for NullBody {
+        fn to_bytes(&self) -> Result<Vec<u8>, crate::BodyError> {
+            unreachable!("codec not exercised")
+        }
+
+        fn from_bytes(_bytes: &[u8]) -> Result<Self, crate::BodyError> {
+            unreachable!("codec not exercised")
+        }
+    }
+
+    /// A venue with the default (coarse) denial classification.
+    struct NowhereVenue;
+
+    impl Venue for NowhereVenue {
+        const ID: VenueId = VenueId::from_static("nowhere");
+        type Body = NullBody;
+    }
+
+    /// A venue granting a `grace:`-prefixed denial one next-block retry.
+    struct GraceVenue;
+
+    impl Venue for GraceVenue {
+        const ID: VenueId = VenueId::from_static("grace");
+        type Body = NullBody;
+
+        fn classify_denied(detail: &str) -> RetryAction {
+            if detail.starts_with("grace:") {
+                RetryAction::DropOnRepeat
+            } else {
+                RetryAction::Drop
+            }
+        }
+    }
+
+    const GRACE_DENIAL: &str = "grace: invalid eip-1271 signature";
+
+    #[test]
+    fn default_classification_drops_denied() {
+        assert_eq!(
+            retry_action::<NowhereVenue>(&VenueFault::Denied("blocked".into())),
+            RetryAction::Drop
+        );
+        // Every non-denied arm keeps the mapping it had before the seam.
+        assert_eq!(
+            retry_action::<NowhereVenue>(&VenueFault::RateLimited {
+                retry_after_ms: Some(2_500),
+            }),
+            RetryAction::Backoff { seconds: 3 }
+        );
+        for transient in [
+            VenueFault::RateLimited {
+                retry_after_ms: None,
+            },
+            VenueFault::Timeout,
+            VenueFault::Unavailable("down".into()),
+        ] {
+            assert_eq!(
+                retry_action::<NowhereVenue>(&transient),
+                RetryAction::TryNextBlock,
+                "{transient:?}",
+            );
+        }
+        for terminal in [
+            VenueFault::UnknownVenue,
+            VenueFault::InvalidBody("bad".into()),
+            VenueFault::Unsupported,
+            VenueFault::InvalidReceipt,
+            VenueFault::ReceiptMismatch,
+        ] {
+            assert_eq!(
+                retry_action::<NowhereVenue>(&terminal),
+                RetryAction::Drop,
+                "{terminal:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn marker_classification_reaches_the_generic_path() {
+        assert_eq!(
+            retry_action::<GraceVenue>(&VenueFault::Denied(GRACE_DENIAL.into())),
+            RetryAction::DropOnRepeat
+        );
+        // A denial the marker does not soften keeps the coarse drop.
+        assert_eq!(
+            retry_action::<GraceVenue>(&VenueFault::Denied("blocked".into())),
+            RetryAction::Drop
+        );
+        // The override is scoped to the denied arm.
+        assert_eq!(
+            retry_action::<GraceVenue>(&VenueFault::Timeout),
+            RetryAction::TryNextBlock
+        );
+    }
+
+    #[test]
+    fn sweep_and_free_fn_agree() {
+        let fault = VenueFault::Denied(GRACE_DENIAL.into());
+        assert_eq!(
+            retry_action::<GraceVenue>(&fault),
+            RetryAction::DropOnRepeat
+        );
+
+        // The sweep under the marker's classifier applies that same
+        // action: the first refusal keeps the watch (the grace)...
+        let host = MockLocalStore::default();
+        put_watch(&host);
+        let venue = StubVenue::new(Err(fault.clone()));
+        let sweep = Keeper::new(
+            StubSource(Outcome::Submit(b"body".to_vec())),
+            &venue,
+            "stub",
+        )
+        .with_classifier(GraceVenue::classify_denied);
+        let report = run(sweep.run(&host, &TICK)).expect("keeper runs");
+        assert_eq!(report.dropped, 0);
+        assert_eq!(report.retried, 1);
+        assert_eq!(WatchSet::new(&host).list().expect("list reads").len(), 1);
+
+        // ...and a repeat at a later block removes it, per DropOnRepeat.
+        let later = Tick {
+            block: TICK.block + 1,
+            ..TICK
+        };
+        run(sweep.run(&host, &later)).expect("keeper runs");
+        assert!(WatchSet::new(&host).list().expect("list reads").is_empty());
+
+        // Without the classifier the sweep matches the free fn default:
+        // the same fault drops on the first refusal.
+        assert_eq!(retry_action::<NowhereVenue>(&fault), RetryAction::Drop);
+        let host = MockLocalStore::default();
+        put_watch(&host);
+        let report = run(keeper(Outcome::Submit(b"body".to_vec()), &venue).run(&host, &TICK))
+            .expect("keeper runs");
+        assert_eq!(report.dropped, 1);
+        assert!(WatchSet::new(&host).list().expect("list reads").is_empty());
+    }
+
+    #[test]
+    fn classified_denial_releases_the_reservation() {
+        let host = MockLocalStore::default();
+        seed_reserved(&host, b"order");
+        let venue = CountingVenue::new(Err(VenueFault::Denied(GRACE_DENIAL.into())));
+
+        // A softened denial is still a definite refusal, so the marker
+        // goes: the reconcile pass keeps no repeat ledger to bound it.
+        let sweep = idle_keeper(&venue).with_classifier(GraceVenue::classify_denied);
+        let report = run(sweep.run(&host, &TICK)).expect("keeper runs");
+        assert_eq!(report.reconciled_pending, 0);
+        assert_eq!(report.reconciled_released, 1);
+        assert_eq!(mark(&host, b"order"), None);
+
+        // The default classification releases the same reservation.
+        let host = MockLocalStore::default();
+        seed_reserved(&host, b"order");
+        let report = run(idle_keeper(&venue).run(&host, &TICK)).expect("keeper runs");
+        assert_eq!(report.reconciled_released, 1);
+        assert_eq!(mark(&host, b"order"), None);
+    }
+
+    #[test]
+    fn a_stranded_softened_denial_still_terminates() {
+        let host = MockLocalStore::default();
+        put_watch(&host);
+        // A prior tick reserved but lost its submit outcome, so this
+        // watch and its reservation both point at the same body.
+        seed_reserved(&host, b"body");
+        let venue = CountingVenue::new(Err(VenueFault::Denied(GRACE_DENIAL.into())));
+        let sweep = Keeper::new(StubSource(Outcome::Submit(b"body".to_vec())), &venue, STUB)
+            .with_classifier(GraceVenue::classify_denied);
+
+        // Ticks advance the block, so the grace can expire; without the
+        // release the marker would pin the watch on the Reserved arm and
+        // the venue would see one POST per tick forever.
+        for n in 0..4u64 {
+            let tick = Tick {
+                block: TICK.block + n,
+                ..TICK
+            };
+            run(sweep.run(&host, &tick)).expect("keeper runs");
+        }
+        assert_eq!(mark(&host, b"body"), None);
+        assert!(
+            WatchSet::new(&host).list().expect("list reads").is_empty(),
+            "a softened denial must still drop the watch on the repeat",
+        );
+    }
+
+    #[test]
+    fn for_venue_takes_the_id_and_the_classification_from_the_marker() {
+        let host = MockLocalStore::default();
+        put_watch(&host);
+        let venue = StubVenue::new(Err(VenueFault::Denied(GRACE_DENIAL.into())));
+        let sweep =
+            Keeper::for_venue::<GraceVenue>(StubSource(Outcome::Submit(b"body".to_vec())), &venue);
+
+        assert_eq!(sweep.venue().as_str(), GraceVenue::ID.as_str());
+        let report = run(sweep.run(&host, &TICK)).expect("keeper runs");
+        assert_eq!(report.dropped, 0);
+        assert_eq!(report.retried, 1);
+        assert_eq!(WatchSet::new(&host).list().expect("list reads").len(), 1);
     }
 }
