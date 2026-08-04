@@ -17,7 +17,10 @@ use nexum_runtime::host::component::ChainMethod;
 use nexum_runtime::host::extension::{EventSources, Extension, ExtensionEvent, ProviderManifest};
 use nexum_runtime::host::state::HostState;
 use nexum_runtime::manifest::{CapabilityRegistry, ExtensionSections, NamespaceCaps};
-use nexum_runtime::supervisor::{BootEnv, Supervisor, build_linker, build_provider_linker};
+use nexum_runtime::supervisor::{
+    BootEnv, Supervisor, WasiClockOverride, build_linker, build_provider_linker,
+};
+use nexum_runtime::test_utils::clock::ManualClock;
 use nexum_runtime::test_utils::rpc::FakeNode;
 use nexum_runtime::test_utils::{
     MockStateStore, MockTypes, mock_components, mock_components_from, test_chain_configs,
@@ -257,11 +260,7 @@ impl VenueInvoker for ScriptedAdapter {
                 gives: native(vec![1]),
                 wants: native(Vec::new()),
                 fee: native(Vec::new()),
-                // This registry runs on the system clock, so a past
-                // instant would turn any quote-then-submit added here
-                // into a stale-quote refusal rather than the path under
-                // test.
-                valid_until_ms: u64::MAX,
+                valid_until_ms: SCRIPTED_QUOTE_VALIDITY_MS,
             })
         })
     }
@@ -282,7 +281,15 @@ impl VenueInvoker for ScriptedAdapter {
     }
 }
 
-/// A registry with one scripted adapter installed under `cow`.
+/// The `valid-until-ms` a scripted quote carries. Inside the record
+/// horizon of a [`ManualClock`] starting at the epoch, so a quote on that
+/// timeline is recorded and stays fresh until a test advances the clock
+/// past this instant. No other test quotes through the scripted adapter.
+const SCRIPTED_QUOTE_VALIDITY_MS: u64 = 60_000;
+
+/// A registry with one scripted adapter installed under `cow`. Its clock
+/// slot stays empty: a booted supervisor fills it through
+/// `Extension::attach_clock`.
 fn scripted_registry(adapter: ScriptedAdapter) -> VenueRegistry {
     let registry = VenueRegistryBuilder::new(Default::default()).build();
     registry
@@ -325,7 +332,22 @@ fn test_engine_config() -> EngineConfig {
     }
 }
 
-/// Boot one module from its wasm and manifest through `boot_single`.
+/// Mirror of the builder's launch ordering: hand every extension the
+/// effective wall clock ahead of instantiation, as `nexum_runtime`'s
+/// builder does before it builds the linker. Tests here assemble the
+/// linker and supervisor by hand, so they take this step themselves.
+fn attach_launch_clock(
+    extensions: &[Arc<dyn Extension<MockTypes>>],
+    clocks: Option<&WasiClockOverride>,
+) {
+    let wall = WasiClockOverride::effective_wall(clocks);
+    for ext in extensions {
+        ext.attach_clock(wall.clone());
+    }
+}
+
+/// Boot one module from its wasm and manifest through `boot_single`, its
+/// WASI clocks overridden when `clocks` is given.
 async fn boot_one(
     engine: &wasmtime::Engine,
     linker: &Linker<HostState<MockTypes>>,
@@ -333,7 +355,9 @@ async fn boot_one(
     manifest: &Path,
     components: &nexum_runtime::host::component::Components<MockTypes>,
     extensions: &[Arc<dyn Extension<MockTypes>>],
+    clocks: Option<WasiClockOverride>,
 ) -> Supervisor<MockTypes> {
+    attach_launch_clock(extensions, clocks.as_ref());
     let entry = ModuleEntry {
         path: wasm.to_path_buf(),
         manifest: Some(manifest.to_path_buf()),
@@ -346,7 +370,7 @@ async fn boot_one(
         components,
         &BootEnv::from_config(&config),
         extensions,
-        None,
+        clocks,
     )
     .await
     .expect("boot_single")
@@ -358,7 +382,16 @@ async fn boot_module(videre: &Arc<Videre>, wasm: &Path, manifest: &Path) -> Supe
     let extensions = videre_assembly(videre);
     let linker = make_linker(&engine, &extensions);
     let components = mock_components();
-    boot_one(&engine, &linker, wasm, manifest, &components, &extensions).await
+    boot_one(
+        &engine,
+        &linker,
+        wasm,
+        manifest,
+        &components,
+        &extensions,
+        None,
+    )
+    .await
 }
 
 /// A module subscribed to `intent-status` receives the polled transitions;
@@ -422,6 +455,100 @@ async fn e2e_intent_status_subscription_receives_polled_transitions() {
     );
 }
 
+/// One [`ManualClock`] drives the whole launch: `as_override()` feeds the
+/// supervisor's WASI clocks, and the runtime hands that same wall clock to
+/// the platform through `Extension::attach_clock`, which lands it in the
+/// registry's quote ledger. One timeline by construction; the runtime
+/// already pins that the attached handle is the guest-served one. The
+/// staleness case runs host-side on it: a quote is fresh until the clock
+/// advances past its validity, then the submit is refused with the
+/// machine-readable `stale-quote:` prefix.
+#[tokio::test]
+async fn e2e_stale_quote_is_refused_on_the_shared_wall_clock() {
+    let Some(wasm) = module_wasm_or_skip("echo-client") else {
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let manifest = echo_client_status_manifest(dir.path());
+
+    let clock = ManualClock::new();
+    let registry = scripted_registry(ScriptedAdapter::new([]));
+    let videre = Arc::new(Videre::from_registry(registry.clone()));
+    let engine = make_wasmtime_engine();
+    let extensions = videre_assembly(&videre);
+    let linker = make_linker(&engine, &extensions);
+    let components = mock_components();
+    let supervisor = boot_one(
+        &engine,
+        &linker,
+        &wasm,
+        &manifest,
+        &components,
+        &extensions,
+        Some(clock.as_override()),
+    )
+    .await;
+    assert_eq!(
+        supervisor.alive_count(),
+        1,
+        "the module boots on the overridden clocks"
+    );
+
+    // Quote, then submit inside the validity window. This leg fails if the
+    // launch clock never reaches the ledger: the real wall clock sits far
+    // past the scripted validity, so the fresh submit would be refused.
+    registry
+        .quote("test-caller", &venue("cow"), b"body".to_vec())
+        .await
+        .expect("quote succeeds");
+    registry
+        .submit("test-caller", &venue("cow"), b"body".to_vec())
+        .await
+        .expect("a fresh quote submits");
+
+    // Advance the one clock past the quoted validity: the same bytes are
+    // now refused ahead of the adapter.
+    clock.advance(Duration::from_millis(SCRIPTED_QUOTE_VALIDITY_MS + 1));
+    let err = registry
+        .submit("test-caller", &venue("cow"), b"body".to_vec())
+        .await
+        .expect_err("the stale quote is refused");
+    let VenueError::Denied(reason) = err else {
+        panic!("expected denied, got {err:?}");
+    };
+    assert!(
+        reason.starts_with("stale-quote: "),
+        "machine prefix intact: {reason}"
+    );
+}
+
+/// The extension seam alone: `attach_clock` lands the handed wall clock
+/// in the registry's quote ledger, filling the builder's empty slot.
+/// Needs no wasm artefact, so the seam stays pinned when the e2e skips.
+#[tokio::test]
+async fn attach_clock_installs_the_quote_ledger_clock() {
+    let clock = ManualClock::new();
+    let registry = scripted_registry(ScriptedAdapter::new([]));
+    let videre = Videre::from_registry(registry.clone());
+    Extension::<MockTypes>::attach_clock(&videre, Arc::new(clock.clone()));
+
+    registry
+        .quote("test-caller", &venue("cow"), b"body".to_vec())
+        .await
+        .expect("quote succeeds");
+    registry
+        .submit("test-caller", &venue("cow"), b"body".to_vec())
+        .await
+        .expect("a fresh quote submits on the attached clock");
+
+    clock.advance(Duration::from_millis(SCRIPTED_QUOTE_VALIDITY_MS + 1));
+    let err = registry
+        .submit("test-caller", &venue("cow"), b"body".to_vec())
+        .await
+        .expect_err("the stale quote is refused");
+    assert!(matches!(err, VenueError::Denied(r) if r.starts_with("stale-quote: ")));
+}
+
 /// The event-loop wiring through the real seam: the platform's `events`
 /// source opens, its poll task drives the supervisor, and the module's
 /// handler observably ran.
@@ -443,8 +570,16 @@ async fn e2e_intent_status_flows_through_the_event_loop() {
     let linker = make_linker(&engine, &extensions);
     let components = mock_components();
     let logs = components.logs.clone();
-    let mut supervisor =
-        boot_one(&engine, &linker, &wasm, &manifest, &components, &extensions).await;
+    let mut supervisor = boot_one(
+        &engine,
+        &linker,
+        &wasm,
+        &manifest,
+        &components,
+        &extensions,
+        None,
+    )
+    .await;
 
     registry
         .submit("test-caller", &venue("cow"), b"body".to_vec())
@@ -1265,8 +1400,16 @@ chain_id = 1
     let components = mock_components();
     let logs = components.logs.clone();
 
-    let mut supervisor =
-        boot_one(&engine, &linker, &wasm, &manifest, &components, &extensions).await;
+    let mut supervisor = boot_one(
+        &engine,
+        &linker,
+        &wasm,
+        &manifest,
+        &components,
+        &extensions,
+        None,
+    )
+    .await;
 
     // The precondition of the client.rs unknown-venue branch: the booted
     // service map holds no venue registry.

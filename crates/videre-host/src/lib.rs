@@ -27,11 +27,11 @@ use tokio::sync::mpsc;
 use tracing::warn;
 use videre_status_body::INTENT_STATUS_KIND;
 use wasmtime::component::{HasSelf, Linker};
+use wasmtime_wasi::HostWallClock;
 
 pub use registry::{
-    Clock, DuplicateVenue, EgressGuard, GuardContext, GuardVerdict, IntentStatusUpdate,
-    InvalidVenueId, SystemClock, VenueActor, VenueAdapterKind, VenueId, VenueInvoker,
-    VenueRegistry, VenueRegistryBuilder,
+    DuplicateVenue, EgressGuard, GuardContext, GuardVerdict, IntentStatusUpdate, InvalidVenueId,
+    VenueActor, VenueAdapterKind, VenueId, VenueInvoker, VenueRegistry, VenueRegistryBuilder,
 };
 
 /// Status-poll channel buffer.
@@ -81,6 +81,12 @@ impl<T: RuntimeTypes> Extension<T> for Videre {
             state
         })?;
         Ok(())
+    }
+
+    /// The launch wall clock feeds the registry's quote-staleness ledger,
+    /// so guests and ledger share one timeline.
+    fn attach_clock(&self, wall: Arc<dyn HostWallClock + Send + Sync>) {
+        self.registry.set_wall_clock(wall);
     }
 
     fn service(&self) -> Option<Arc<dyn HostService>> {
