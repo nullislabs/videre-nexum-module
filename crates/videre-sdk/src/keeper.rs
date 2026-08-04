@@ -6,7 +6,8 @@
 
 use nexum_sdk::host::{Fault, LocalStoreHost};
 use nexum_sdk::keeper::{
-    Gates, Journal, Mark, Poller, Reservation, Retrier, RetryAction, Tick, WatchRef, WatchSet,
+    Disposition, Gates, Journal, Mark, Poller, Reservation, Retrier, RetryAction, Tick, WatchRef,
+    WatchSet,
 };
 use nexum_sdk::prelude::{hex, keccak256};
 
@@ -230,8 +231,12 @@ impl<S, P: VenueTransport> Keeper<S, P> {
 ///   [`RetryAction::DropOnRepeat`]): released. A denial the venue softens
 ///   to `DropOnRepeat` still releases here; its grace is the watch-level
 ///   [`Retrier`] ledger, which the next tick's poll re-enters.
-/// - transient refusal: left `RESERVED` for the next tick; a rate-limit
-///   hint re-parks `next_eligible`.
+/// - backing-off refusal (a rate-limit hint, or a denial the venue
+///   classifies to [`RetryAction::Backoff`]): re-parks `next_eligible`.
+/// - transient refusal: left `RESERVED` for the next tick.
+///
+/// Every refusal arm folds through [`refusal_disposition`], so the pass
+/// never derives a disposition the retry mapping disagrees with.
 pub async fn reconcile<H, P>(
     venue: &VenueId,
     venues: &P,
@@ -269,35 +274,38 @@ where
                 journal.release(&key)?;
                 report.unsigned.push(tx);
             }
-            Err(fault) if releases_reservation(&fault, classify) => {
-                journal.release(&key)?;
-                report.released += 1;
-            }
-            Err(VenueFault::RateLimited {
-                retry_after_ms: Some(ms),
-            }) => {
-                journal.park(&key, &body, tick.epoch_s.saturating_add(ms.div_ceil(1000)))?;
-                report.pending += 1;
-            }
-            // Transient (timeout, unavailable, throttle without a hint):
-            // leave the marker for the next tick.
-            Err(_) => report.pending += 1,
+            Err(fault) => match refusal_disposition(&fault, classify, tick) {
+                Disposition::Release => {
+                    journal.release(&key)?;
+                    report.released += 1;
+                }
+                Disposition::Park { until } => {
+                    journal.park(&key, &body, until)?;
+                    report.pending += 1;
+                }
+                // Transient (timeout, unavailable, throttle without a
+                // hint): leave the marker for the next tick.
+                _ => report.pending += 1,
+            },
         }
     }
     Ok(report)
 }
 
-/// A venue refusal the reservation must not outlive: its
-/// [`retry_action_with`] under `classify` is drop-class, so the marker is
-/// safe to release. [`RetryAction::DropOnRepeat`] counts as drop-class
-/// because the grace is a watch-level ledger the [`Retrier`] keeps; the
-/// reconcile pass has no repeat counter, so holding the reservation would
-/// re-POST the same refused body every tick forever.
-fn releases_reservation(fault: &VenueFault, classify: DenialClassifier) -> bool {
-    matches!(
-        retry_action_with(fault, classify),
-        RetryAction::Drop | RetryAction::DropOnRepeat
-    )
+/// The one place a refusal becomes a reservation disposition, so the
+/// reconcile pass and a [`Journal::guard`] caller never derive it apart.
+/// Drop-class releases: the grace behind [`RetryAction::DropOnRepeat`] is
+/// a watch-level ledger the [`Retrier`] keeps, and this pass has no repeat
+/// counter, so holding the reservation would re-POST the same refused body
+/// every tick forever.
+fn refusal_disposition(fault: &VenueFault, classify: DenialClassifier, tick: &Tick) -> Disposition {
+    match retry_action_with(fault, classify) {
+        RetryAction::Drop | RetryAction::DropOnRepeat => Disposition::Release,
+        RetryAction::Backoff { seconds } => Disposition::Park {
+            until: tick.epoch_s.saturating_add(seconds),
+        },
+        _ => Disposition::Retain,
+    }
 }
 
 /// One run's tally, by watch disposition.
@@ -406,7 +414,7 @@ mod tests {
 
     use super::{
         DEFAULT_RECONCILE_BUDGET, DROP_DENIED, Keeper, Outcome, RetryAction, RunReport, reconcile,
-        releases_reservation, retry_action, submission_key,
+        refusal_disposition, retry_action, submission_key,
     };
     use crate::client::{Venue, VenueId, VenueTransport};
     use crate::{IntentStatus, Quotation, SubmitOutcome, UnsignedTx, VenueFault};
@@ -1208,13 +1216,7 @@ mod tests {
                 let disposition = match &outcome {
                     Ok(SubmitOutcome::Accepted(_)) => Disposition::Commit,
                     Ok(SubmitOutcome::RequiresSigning(_)) => Disposition::Release,
-                    Err(VenueFault::RateLimited {
-                        retry_after_ms: Some(ms),
-                    }) => Disposition::Park {
-                        until: tick.epoch_s.saturating_add(ms.div_ceil(1000)),
-                    },
-                    Err(fault) if releases_reservation(fault, DROP_DENIED) => Disposition::Release,
-                    Err(_) => Disposition::Retain,
+                    Err(fault) => refusal_disposition(fault, DROP_DENIED, tick),
                 };
                 (disposition, outcome)
             })
@@ -1558,6 +1560,51 @@ mod tests {
             WatchSet::new(&host).list().expect("list reads").is_empty(),
             "a softened denial must still drop the watch on the repeat",
         );
+    }
+
+    /// A venue that paces a `slow:` denial instead of dropping it.
+    struct PacedVenue;
+
+    impl Venue for PacedVenue {
+        const ID: VenueId = VenueId::from_static("stub");
+        type Body = NullBody;
+
+        fn classify_denied(detail: &str) -> RetryAction {
+            if detail.starts_with("slow:") {
+                RetryAction::Backoff { seconds: 30 }
+            } else {
+                RetryAction::Drop
+            }
+        }
+    }
+
+    #[test]
+    fn a_backoff_classification_parks_the_reservation() {
+        let host = MockLocalStore::default();
+        seed_reserved(&host, b"order");
+        let venue = CountingVenue::new(Err(VenueFault::Denied("slow: try later".into())));
+        let sweep = idle_keeper(&venue).with_classifier(PacedVenue::classify_denied);
+
+        // The venue asked for 30s, so the marker must carry that gate
+        // rather than re-POST on every tick.
+        let report = run(sweep.run(&host, &TICK)).expect("keeper runs");
+        assert_eq!(report.reconciled_pending, 1);
+        assert_eq!(mark(&host, b"order"), Some(Mark::Reserved));
+
+        let within = Tick {
+            epoch_s: TICK.epoch_s + 29,
+            ..TICK
+        };
+        let report = run(sweep.run(&host, &within)).expect("keeper runs");
+        assert_eq!(report.reconciled_gated, 1);
+        assert_eq!(venue.post_count(), 1, "the parked marker must not re-POST");
+
+        let after = Tick {
+            epoch_s: TICK.epoch_s + 30,
+            ..TICK
+        };
+        run(sweep.run(&host, &after)).expect("keeper runs");
+        assert_eq!(venue.post_count(), 2);
     }
 
     #[test]
