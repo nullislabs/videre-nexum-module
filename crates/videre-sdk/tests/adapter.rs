@@ -328,3 +328,15 @@ fn unbound_venue_is_unknown_at_the_client() {
         ClientError::Venue(VenueFault::UnknownVenue)
     ));
 }
+
+#[test]
+fn unbound_venue_quote_is_unknown_at_the_client() {
+    // The quote-path sibling of the submit test above: the typed
+    // rejection surfaces through `VenueClient::quote` and the `Quoted`
+    // typestate is never constructed.
+    let client = VenueClient::<NowhereVenue, _>::with_transport(InProcessClient);
+    assert!(matches!(
+        run(client.quote(&v2_body())).unwrap_err(),
+        ClientError::Venue(VenueFault::UnknownVenue)
+    ));
+}
