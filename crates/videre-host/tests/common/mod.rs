@@ -13,22 +13,31 @@ pub fn workspace_path(relative: &str) -> PathBuf {
         .join(relative)
 }
 
+/// Opt-in escape hatch for a run with no guest wasms built.
+const SKIP_VAR: &str = "VIDERE_SKIP_MISSING_WASMS";
+
 /// Path to a module's `.wasm` artefact under the workspace target dir.
-/// A missing artefact is a hard failure under CI (the gate may not skip
-/// itself) and a soft skip locally.
+/// A missing artefact fails the test: skipping is what let a run with zero
+/// wasms built report all green, and a runner captures the skip message of a
+/// passing test. `VIDERE_SKIP_MISSING_WASMS` opts back into the skip, except
+/// under `CI` where the gate may not excuse itself.
 pub fn module_wasm_or_skip(module_name: &str) -> Option<PathBuf> {
-    wasm_or_skip(module_name, std::env::var_os("CI").is_some())
+    wasm_or_skip(
+        module_name,
+        std::env::var_os(SKIP_VAR).is_some(),
+        std::env::var_os("CI").is_some(),
+    )
 }
 
-fn wasm_or_skip(module_name: &str, ci: bool) -> Option<PathBuf> {
+fn wasm_or_skip(module_name: &str, skip_requested: bool, ci: bool) -> Option<PathBuf> {
     let artifact = module_name.replace('-', "_");
     let p = workspace_path(&format!("target/wasm32-wasip2/release/{artifact}.wasm"));
-    if p.exists() {
+    if p.is_file() {
         return Some(p);
     }
     assert!(
-        !ci,
-        "{} must be prebuilt in CI - run `just build-modules`",
+        skip_requested && !ci,
+        "{} is missing - run `just build-modules`",
         p.display()
     );
     eprintln!("SKIP: {} not found - run `just build-modules`", p.display());
@@ -40,13 +49,19 @@ mod tests {
     use super::wasm_or_skip;
 
     #[test]
-    #[should_panic(expected = "must be prebuilt in CI")]
-    fn missing_wasm_hard_fails_under_ci() {
-        wasm_or_skip("no-such-module", true);
+    #[should_panic(expected = "run `just build-modules`")]
+    fn missing_wasm_hard_fails_by_default() {
+        wasm_or_skip("no-such-module", false, false);
     }
 
     #[test]
-    fn missing_wasm_skips_locally() {
-        assert!(wasm_or_skip("no-such-module", false).is_none());
+    fn missing_wasm_skips_when_opted_in() {
+        assert!(wasm_or_skip("no-such-module", true, false).is_none());
+    }
+
+    #[test]
+    #[should_panic(expected = "run `just build-modules`")]
+    fn ci_overrides_the_skip_opt_in() {
+        wasm_or_skip("no-such-module", true, true);
     }
 }

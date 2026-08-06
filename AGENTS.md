@@ -43,6 +43,7 @@ just ci              # the full local mirror of .github/workflows/ci.yml
 
 Nextest does not run doctests, so run `cargo test --doc --workspace --all-features` after `just test`.
 The integration tests load the module wasms from `target/wasm32-wasip2/release/`, so run `just build-modules` before the suite.
+A missing wasm fails the test instead of skipping it; set `VIDERE_SKIP_MISSING_WASMS=1` to skip instead, which `CI` ignores.
 `just fmt` and `just lint` are the pre-commit gate, and CI sets `-D warnings` globally, so fix every warning.
 
 The hooks in `.claude/hooks/` support this loop: `rustfmt-on-edit.sh` formats each edited `.rs` file.

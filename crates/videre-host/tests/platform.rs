@@ -1,7 +1,7 @@
 //! E2E coverage for the videre platform over the generic runtime seam: the
 //! venue-adapter provider boot, the client -> registry -> adapter round
 //! trip, the status-poll event source, and the trap-to-recovery sweeps.
-//! A missing wasm artefact skips locally and hard-fails in CI.
+//! A missing wasm artefact fails the run; see `common::module_wasm_or_skip`.
 
 mod common;
 
