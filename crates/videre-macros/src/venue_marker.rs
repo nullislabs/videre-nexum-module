@@ -50,11 +50,26 @@ impl Parse for Args {
 pub fn expand(attr: TokenStream, input: &ItemImpl) -> Result<TokenStream, syn::Error> {
     let args: Args = syn::parse2(attr)?;
     let trait_path = marker_shape(input)?;
+    id_shape_check(&args.id)?;
     // Read the crate manifest at expansion and hold the id to its
     // registered name, alloy-`sol!`-style. Any mismatch is a
     // compile_error, so the marker and the adapter it types cannot drift.
     let manifest_path = manifest_id_check(&args.id)?;
     Ok(emit(input, trait_path, &args, &manifest_path))
+}
+
+/// Reject an empty or whitespace-padded id literal at expansion, before
+/// the manifest comparison: the registry refuses such an id at install,
+/// so the marker fails at the earliest surface with a spelled-out error.
+fn id_shape_check(id: &LitStr) -> Result<(), syn::Error> {
+    let value = id.value();
+    if value.is_empty() || value.trim().len() != value.len() {
+        return Err(syn::Error::new(
+            id.span(),
+            format!("venue id {value:?} must not be empty or whitespace-padded"),
+        ));
+    }
+    Ok(())
 }
 
 /// Emit the filled marker impl. The source body's provided-method
@@ -151,10 +166,11 @@ fn manifest_id_check(id: &LitStr) -> Result<String, syn::Error> {
 
 #[cfg(test)]
 mod tests {
+    use proc_macro2::Span;
     use quote::quote;
-    use syn::ItemImpl;
+    use syn::{ItemImpl, LitStr};
 
-    use super::{Args, emit, marker_shape};
+    use super::{Args, emit, id_shape_check, marker_shape};
 
     const OVERRIDING_MARKER: &str = "impl Venue for Marker {
              fn classify_denied(detail: &str) -> RetryAction { RetryAction::DropOnRepeat }
@@ -199,6 +215,22 @@ mod tests {
             shape_error("impl Venue for Marker { type Body = X; }")
                 .is_some_and(|e| e.contains("supplies `ID` and `Body`")),
         );
+    }
+
+    #[test]
+    fn a_padded_or_empty_id_literal_is_rejected() {
+        let id_error = |id: &str| {
+            id_shape_check(&LitStr::new(id, Span::call_site()))
+                .err()
+                .map(|e| e.to_string())
+        };
+        assert!(id_error("demo ").is_some_and(|e| e.contains("whitespace-padded")));
+        assert!(id_error(" demo").is_some());
+        assert!(id_error("\tdemo\n").is_some());
+        assert!(id_error("demo\u{a0}").is_some());
+        assert!(id_error("").is_some());
+        assert_eq!(id_error("demo"), None);
+        assert_eq!(id_error("demo:11155111"), None);
     }
 
     #[test]

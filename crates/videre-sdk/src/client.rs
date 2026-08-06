@@ -19,15 +19,38 @@ use crate::bindings::videre::venue::client as shims;
 use crate::{BodyError, IntentBody, IntentStatus, Quotation, SubmitOutcome, VenueFault};
 
 /// Venue identifier: the id an adapter registers under and every client
-/// call routes to. Opaque beyond equality.
+/// call routes to. Opaque beyond equality and never empty or
+/// whitespace-padded: every constructor validates, at const evaluation
+/// for [`VenueId::from_static`].
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct VenueId(Cow<'static, str>);
 
+/// A candidate venue id failed validation at a boundary.
+#[derive(Debug, thiserror::Error)]
+#[error("venue id must not be empty or whitespace-padded (got {0:?})")]
+pub struct InvalidVenueId(String);
+
 impl VenueId {
-    /// Wrap a static id without allocating.
+    /// Wrap a static id without allocating. An empty or padded literal
+    /// panics at const evaluation, so it never compiles into a marker.
     #[must_use]
     pub const fn from_static(id: &'static str) -> Self {
+        assert!(
+            !padded(id),
+            "venue id must not be empty or whitespace-padded"
+        );
         Self(Cow::Borrowed(id))
+    }
+
+    /// Validating constructor: rejects empty input and surrounding
+    /// whitespace. Padded ids are rejected, never trimmed: a trim would
+    /// collapse two spellings into one id.
+    pub fn new(id: impl Into<Cow<'static, str>>) -> Result<Self, InvalidVenueId> {
+        let id = id.into();
+        if padded(&id) {
+            return Err(InvalidVenueId(id.into_owned()));
+        }
+        Ok(Self(id))
     }
 
     /// The id at its wire spelling.
@@ -37,15 +60,71 @@ impl VenueId {
     }
 }
 
-impl From<String> for VenueId {
-    fn from(id: String) -> Self {
-        Self(Cow::Owned(id))
+/// True when `id` is empty or opens or closes on Unicode whitespace.
+/// Const for [`VenueId::from_static`], so the boundary chars are decoded
+/// by hand: `str::chars` is not const.
+const fn padded(id: &str) -> bool {
+    let bytes = id.as_bytes();
+    if bytes.is_empty() {
+        return true;
+    }
+    let mut last = bytes.len() - 1;
+    while bytes[last] & 0xC0 == 0x80 {
+        last -= 1;
+    }
+    is_whitespace(code_point_at(bytes, 0)) || is_whitespace(code_point_at(bytes, last))
+}
+
+/// Decode the code point starting at `at`; `str` guarantees well-formed
+/// UTF-8.
+const fn code_point_at(bytes: &[u8], at: usize) -> u32 {
+    let b0 = bytes[at] as u32;
+    match b0 {
+        0x00..=0x7F => b0,
+        0xC0..=0xDF => ((b0 & 0x1F) << 6) | (bytes[at + 1] as u32 & 0x3F),
+        0xE0..=0xEF => {
+            ((b0 & 0x0F) << 12)
+                | ((bytes[at + 1] as u32 & 0x3F) << 6)
+                | (bytes[at + 2] as u32 & 0x3F)
+        }
+        _ => {
+            ((b0 & 0x07) << 18)
+                | ((bytes[at + 1] as u32 & 0x3F) << 12)
+                | ((bytes[at + 2] as u32 & 0x3F) << 6)
+                | (bytes[at + 3] as u32 & 0x3F)
+        }
     }
 }
 
-impl From<&str> for VenueId {
-    fn from(id: &str) -> Self {
-        Self(Cow::Owned(id.to_owned()))
+/// `char::is_whitespace` over a raw code point.
+const fn is_whitespace(cp: u32) -> bool {
+    match char::from_u32(cp) {
+        Some(c) => c.is_whitespace(),
+        None => false,
+    }
+}
+
+impl std::str::FromStr for VenueId {
+    type Err = InvalidVenueId;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::new(s.to_owned())
+    }
+}
+
+impl TryFrom<String> for VenueId {
+    type Error = InvalidVenueId;
+
+    fn try_from(id: String) -> Result<Self, Self::Error> {
+        Self::new(id)
+    }
+}
+
+impl TryFrom<&str> for VenueId {
+    type Error = InvalidVenueId;
+
+    fn try_from(id: &str) -> Result<Self, Self::Error> {
+        id.parse()
     }
 }
 
@@ -369,7 +448,63 @@ pub enum ClientError {
 mod tests {
     use std::task::Poll;
 
-    use super::poll_once;
+    use super::{VenueId, padded, poll_once};
+
+    #[test]
+    fn blank_venue_id_is_rejected_at_construction() {
+        assert!("".parse::<VenueId>().is_err());
+        assert!("  ".parse::<VenueId>().is_err());
+        assert!(VenueId::new("\t\n").is_err());
+        assert_eq!("demo".parse::<VenueId>().expect("parses").as_str(), "demo");
+        // `:` stays legal for the future chain-qualified shape.
+        assert_eq!(
+            "demo:11155111".parse::<VenueId>().expect("parses").as_str(),
+            "demo:11155111"
+        );
+    }
+
+    #[test]
+    fn padded_venue_id_is_rejected_at_construction() {
+        assert!("demo ".parse::<VenueId>().is_err());
+        assert!(" demo".parse::<VenueId>().is_err());
+        assert!(VenueId::try_from("demo\n").is_err());
+        assert!(VenueId::try_from("\tdemo".to_owned()).is_err());
+        assert!(VenueId::new("demo\u{a0}").is_err());
+        assert!(VenueId::new("\u{2028}demo".to_owned()).is_err());
+        // Interior whitespace is not surrounding: reject-not-trim keeps
+        // the spelling exact and never rewrites it.
+        assert!(VenueId::new("demo venue").is_ok());
+    }
+
+    #[test]
+    fn valid_ids_construct_through_every_path() {
+        assert_eq!(VenueId::from_static("demo").as_str(), "demo");
+        assert_eq!(
+            VenueId::new("demo".to_owned())
+                .expect("constructs")
+                .as_str(),
+            "demo"
+        );
+        assert_eq!(
+            VenueId::try_from("demo").expect("converts").to_string(),
+            "demo"
+        );
+        assert_eq!(AsRef::<str>::as_ref(&VenueId::from_static("demo")), "demo");
+    }
+
+    #[test]
+    fn padded_walks_every_utf8_width_at_both_ends() {
+        // One boundary char per encoded width, whitespace and not:
+        // U+0020/U+0041 (1), U+00A0/U+00C0 (2), U+2028/U+4E00 (3),
+        // U+1F600 (4, never whitespace).
+        for ws in ["\u{20}", "\u{a0}", "\u{2028}", "\u{3000}"] {
+            assert!(padded(&format!("{ws}demo")), "{ws:?} leads");
+            assert!(padded(&format!("demo{ws}")), "{ws:?} trails");
+        }
+        for ok in ["A", "\u{c0}", "\u{4e00}", "\u{1f600}"] {
+            assert!(!padded(&format!("{ok}demo{ok}")), "{ok:?} wraps");
+        }
+    }
 
     #[test]
     fn ready_chain_completes_in_one_poll() {
