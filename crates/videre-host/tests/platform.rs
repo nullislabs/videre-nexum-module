@@ -906,8 +906,6 @@ body_versions = [1]
     );
 }
 
-// ── venue logging capability ──────────────────────────────────────────
-
 /// A logging-declaring adapter's `tracing` events reach the host log
 /// pipeline as host-interface records with each event's own level and its
 /// structured fields intact: the stderr-sink workaround's signature (every
@@ -919,40 +917,13 @@ async fn e2e_logging_adapter_tracing_reaches_the_host_pipeline() {
     let Some(wasm) = module_wasm_or_skip("logging-venue") else {
         return;
     };
-    // The runtime pin validates a provider manifest against its
-    // scoped-transport capability registry, which does not carry a
-    // `logging` row yet, so the boot manifest cannot declare what the
-    // component's world already gates at compile time. Boot with the
-    // declaration omitted (the logging import is not capability-mapped on
-    // the provider side); swap this for the fixture's own module.toml once
-    // nexum-runtime admits `logging` to PROVIDER_CAPABILITIES, tracked as
-    // nullislabs/nexum-runtime#76. Booting the fixture manifest today fails
-    // with `unknown capability "logging" in [capabilities]`.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let manifest = dir.path().join("module.toml");
-    std::fs::write(
-        &manifest,
-        r#"
-[module]
-name = "logging-venue"
-version = "0.1.0"
-kind = "venue-adapter"
-component = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-
-[capabilities]
-required = []
-optional = []
-"#,
-    )
-    .expect("write boot manifest");
-
     let components = mock_components();
     let logs = components.logs.clone();
     let engine = make_wasmtime_engine();
     let config = EngineConfig {
         adapters: vec![AdapterEntry {
             path: wasm,
-            manifest: Some(manifest),
+            manifest: Some(workspace_path("modules/fixtures/logging-venue/module.toml")),
             http_allow: Vec::new(),
             messaging_topics: Vec::new(),
         }],
@@ -966,7 +937,7 @@ optional = []
         .await
         .expect("boot");
     assert_eq!(
-        supervisor.adapter_alive_count(),
+        registry_of(&supervisor).alive_venue_count(),
         1,
         "logging-venue boots alive"
     );
@@ -1032,6 +1003,57 @@ optional = []
                 .collect::<Vec<_>>(),
         );
     }
+}
+
+/// An adapter whose component imports `nexum:host/logging` without
+/// declaring the capability refuses at boot: the runtime holds the
+/// provider's imports to its manifest just as it does for modules.
+#[tokio::test]
+async fn e2e_undeclared_logging_import_refuses_the_adapter_at_boot() {
+    let Some(wasm) = module_wasm_or_skip("logging-venue") else {
+        return;
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let manifest = dir.path().join("module.toml");
+    std::fs::write(
+        &manifest,
+        r#"
+[module]
+name = "logging-venue"
+version = "0.1.0"
+kind = "venue-adapter"
+
+[capabilities]
+required = []
+optional = []
+"#,
+    )
+    .expect("write boot manifest");
+
+    let components = mock_components();
+    let engine = make_wasmtime_engine();
+    let config = EngineConfig {
+        adapters: vec![AdapterEntry {
+            path: wasm,
+            manifest: Some(manifest),
+            http_allow: Vec::new(),
+            messaging_topics: Vec::new(),
+        }],
+        ..Default::default()
+    };
+    let videre = Arc::new(platform(&config));
+    let extensions = videre_assembly(&videre);
+    let linker = make_linker(&engine, &extensions);
+
+    let Err(err) =
+        Supervisor::boot(&engine, &linker, &config, &components, &extensions, None).await
+    else {
+        panic!("an undeclared logging import must refuse to boot");
+    };
+    let chain = format!("{err:#}");
+    assert!(chain.contains("capability violation"), "{chain}");
+    assert!(chain.contains("nexum:host/logging"), "{chain}");
+    assert!(chain.contains("not listed in [capabilities]"), "{chain}");
 }
 
 // ── venue-adapter trap recovery ───────────────────────────────────────
