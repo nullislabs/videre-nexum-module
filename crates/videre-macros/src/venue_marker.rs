@@ -6,7 +6,7 @@
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
-use syn::{ItemImpl, LitStr, Token, Type};
+use syn::{ImplItem, ItemImpl, LitStr, Token, Type};
 
 /// `id = "cow", body = CowIntentBody`: the venue id and the body schema
 /// the marker binds.
@@ -49,7 +49,39 @@ impl Parse for Args {
 /// id equals the crate manifest's `[module] name`.
 pub fn expand(attr: TokenStream, input: &ItemImpl) -> Result<TokenStream, syn::Error> {
     let args: Args = syn::parse2(attr)?;
+    let trait_path = marker_shape(input)?;
+    // Read the crate manifest at expansion and hold the id to its
+    // registered name, alloy-`sol!`-style. Any mismatch is a
+    // compile_error, so the marker and the adapter it types cannot drift.
+    let manifest_path = manifest_id_check(&args.id)?;
+    Ok(emit(input, trait_path, &args, &manifest_path))
+}
 
+/// Emit the filled marker impl. The source body's provided-method
+/// overrides are re-emitted verbatim: drop them and a venue's
+/// `classify_denied` silently reverts to the coarse default.
+fn emit(input: &ItemImpl, trait_path: &syn::Path, args: &Args, manifest_path: &str) -> TokenStream {
+    let self_ty = &input.self_ty;
+    let id = &args.id;
+    let body = &args.body;
+    let overrides = &input.items;
+    quote! {
+        // Rebuild anchor: an edited `[module] name` re-runs the check.
+        const _: &[u8] = ::core::include_bytes!(#manifest_path);
+
+        impl #trait_path for #self_ty {
+            const ID: ::videre_sdk::client::VenueId =
+                ::videre_sdk::client::VenueId::from_static(#id);
+            type Body = #body;
+            #(#overrides)*
+        }
+    }
+}
+
+/// Check the impl is a non-generic inherent-free `impl Venue for Marker`
+/// whose body leaves `ID` and `Body` to the attribute, and return the
+/// trait path to re-emit.
+fn marker_shape(input: &ItemImpl) -> Result<&syn::Path, syn::Error> {
     let Some((None, trait_path, _)) = &input.trait_ else {
         return Err(syn::Error::new_spanned(
             &input.self_ty,
@@ -66,11 +98,21 @@ pub fn expand(attr: TokenStream, input: &ItemImpl) -> Result<TokenStream, syn::E
             "#[videre_sdk::venue(id = ..)] must be applied to an impl of `videre_sdk::client::Venue`",
         ));
     }
-    if !input.items.is_empty() {
-        return Err(syn::Error::new_spanned(
-            &input.self_ty,
-            "#[videre_sdk::venue(id = ..)] fills the impl body; leave it empty",
-        ));
+    // The attribute owns `ID` and `Body`; anything else in the body is a
+    // provided-method override (`classify_denied`) and passes through.
+    for item in &input.items {
+        let supplied = match item {
+            ImplItem::Const(item) => item.ident == "ID",
+            ImplItem::Type(item) => item.ident == "Body",
+            _ => false,
+        };
+        if supplied {
+            return Err(syn::Error::new_spanned(
+                item,
+                "#[videre_sdk::venue(id = ..)] supplies `ID` and `Body`; the impl body may only \
+                 override a provided method",
+            ));
+        }
     }
     if !input.generics.params.is_empty() {
         return Err(syn::Error::new_spanned(
@@ -78,26 +120,7 @@ pub fn expand(attr: TokenStream, input: &ItemImpl) -> Result<TokenStream, syn::E
             "#[videre_sdk::venue(id = ..)] must be applied to a non-generic impl",
         ));
     }
-
-    let self_ty = &input.self_ty;
-    let id = &args.id;
-    let body = &args.body;
-
-    // Read the crate manifest at expansion and hold the id to its
-    // registered name, alloy-`sol!`-style. Any mismatch is a
-    // compile_error, so the marker and the adapter it types cannot drift.
-    let manifest_path = manifest_id_check(id)?;
-
-    Ok(quote! {
-        // Rebuild anchor: an edited `[module] name` re-runs the check.
-        const _: &[u8] = ::core::include_bytes!(#manifest_path);
-
-        impl #trait_path for #self_ty {
-            const ID: ::videre_sdk::client::VenueId =
-                ::videre_sdk::client::VenueId::from_static(#id);
-            type Body = #body;
-        }
-    })
+    Ok(trait_path)
 }
 
 /// Assert `id` equals the crate manifest's `[module] name`, returning the
@@ -124,4 +147,64 @@ fn manifest_id_check(id: &LitStr) -> Result<String, syn::Error> {
         )));
     }
     Ok(manifest_path.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use quote::quote;
+    use syn::ItemImpl;
+
+    use super::{Args, emit, marker_shape};
+
+    const OVERRIDING_MARKER: &str = "impl Venue for Marker {
+             fn classify_denied(detail: &str) -> RetryAction { RetryAction::DropOnRepeat }
+         }";
+
+    fn parse(source: &str) -> ItemImpl {
+        syn::parse_str(source).expect("the fixture parses as an impl")
+    }
+
+    fn shape_error(source: &str) -> Option<String> {
+        marker_shape(&parse(source)).err().map(|e| e.to_string())
+    }
+
+    #[test]
+    fn a_provided_method_override_passes_the_shape_gate() {
+        assert_eq!(shape_error(OVERRIDING_MARKER), None);
+    }
+
+    #[test]
+    fn a_provided_method_override_reaches_the_emitted_impl() {
+        let input = parse(OVERRIDING_MARKER);
+        let trait_path = marker_shape(&input).expect("the fixture is a marker impl");
+        let args: Args =
+            syn::parse2(quote! { id = "marker", body = MarkerBody }).expect("the args parse");
+
+        let emitted = emit(&input, trait_path, &args, "module.toml").to_string();
+        assert!(emitted.contains("const ID"), "{emitted}");
+        assert!(emitted.contains("type Body = MarkerBody"), "{emitted}");
+        assert!(
+            emitted.contains("classify_denied") && emitted.contains("DropOnRepeat"),
+            "the attribute must not swallow the override: {emitted}",
+        );
+    }
+
+    #[test]
+    fn a_hand_written_id_or_body_is_rejected() {
+        assert!(
+            shape_error("impl Venue for Marker { const ID: VenueId = X; }")
+                .is_some_and(|e| e.contains("supplies `ID` and `Body`")),
+        );
+        assert!(
+            shape_error("impl Venue for Marker { type Body = X; }")
+                .is_some_and(|e| e.contains("supplies `ID` and `Body`")),
+        );
+    }
+
+    #[test]
+    fn a_non_venue_impl_is_rejected() {
+        assert!(shape_error("impl Other for Marker {}").is_some());
+        assert!(shape_error("impl Marker {}").is_some());
+        assert!(shape_error("impl<T> Venue for Marker<T> {}").is_some());
+    }
 }

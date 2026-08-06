@@ -35,7 +35,8 @@ pub use client::{
 };
 pub use faults::VenueFault;
 pub use keeper::{
-    DEFAULT_RECONCILE_BUDGET, Keeper, Outcome, ReconcileReport, RunReport, reconcile, retry_action,
+    DEFAULT_RECONCILE_BUDGET, DenialClassifier, Keeper, Outcome, ReconcileReport, RunReport,
+    reconcile, retry_action,
 };
 /// Derive [`IntentBody`] on the outer per-venue version enum.
 pub use videre_macros::IntentBody;

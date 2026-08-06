@@ -12,6 +12,7 @@ use std::marker::PhantomData;
 use std::pin::pin;
 use std::task::{Context, Poll, Waker};
 
+use nexum_sdk::keeper::RetryAction;
 use strum::IntoStaticStr;
 
 use crate::bindings::videre::venue::client as shims;
@@ -68,6 +69,22 @@ pub trait Venue {
 
     /// The versioned body schema the venue decodes.
     type Body: IntentBody;
+
+    /// Classify a `denied` detail into the retry action the generic
+    /// keeper path folds it to. Defaults to the coarse mapping: every
+    /// denial drops. Static, not a method: markers are unit types, so
+    /// the keeper carries this as a plain `fn` pointer
+    /// ([`DenialClassifier`](crate::keeper::DenialClassifier)).
+    ///
+    /// Only a drop-class action retires a stranded reservation: classify
+    /// a denial as [`RetryAction::TryNextBlock`] and [`reconcile`] holds
+    /// the marker `RESERVED` and re-POSTs the refused body every tick.
+    ///
+    /// [`reconcile`]: crate::keeper::reconcile
+    fn classify_denied(detail: &str) -> RetryAction {
+        let _ = detail;
+        RetryAction::Drop
+    }
 }
 
 /// Sealing markers: a transport opts into [`VenueTransport`], and an
