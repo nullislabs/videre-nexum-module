@@ -907,9 +907,10 @@ body_versions = [1]
 }
 
 /// A logging-declaring adapter's `tracing` events reach the host log
-/// pipeline as host-interface records with each event's own level and its
-/// structured fields intact: the stderr-sink workaround's signature (every
-/// line a WARN stderr record) must not be the carrier.
+/// pipeline from `init` and from a dispatched verb, as host-interface
+/// records with each event's own level and its structured fields intact:
+/// the stderr-sink workaround's signature (every line a WARN stderr
+/// record) must not be the carrier.
 #[tokio::test]
 async fn e2e_logging_adapter_tracing_reaches_the_host_pipeline() {
     use nexum_runtime::host::logs::LogSource;
@@ -936,18 +937,31 @@ async fn e2e_logging_adapter_tracing_reaches_the_host_pipeline() {
     let supervisor = Supervisor::boot(&engine, &linker, &config, &components, &extensions, None)
         .await
         .expect("boot");
-    assert_eq!(
-        registry_of(&supervisor).alive_venue_count(),
-        1,
-        "logging-venue boots alive"
-    );
+    let registry = registry_of(&supervisor);
+    assert_eq!(registry.alive_venue_count(), 1, "logging-venue boots alive");
+
+    // The motivating case is a verb-interior fact, not a boot-time one, so
+    // drive one submit: the host logging call must carry from inside a
+    // dispatched verb as well as from `init`.
+    let outcome = registry
+        .submit("mod-a", &venue("logging-venue"), b"body".to_vec())
+        .await
+        .expect("the adapter accepts");
+    assert!(matches!(outcome, SubmitOutcome::Accepted(r) if r == b"body"));
 
     // `init` installed the facade, emitted one INFO and one WARN event
-    // carrying fields, then one bare probe per level. All must land as
-    // host-interface records at their own level, fields rendered in.
+    // carrying fields, then one self-naming probe per level; `submit`
+    // added its own. All must land as host-interface records at the
+    // emitting event's level, fields rendered in.
     let runs = logs.list_runs("logging-venue");
     assert_eq!(runs.len(), 1, "one run recorded for the adapter");
     let page = logs.read(&runs[0].run, 0);
+    let dump = || {
+        page.records
+            .iter()
+            .map(|r| (r.source, r.level, r.message.as_str()))
+            .collect::<Vec<_>>()
+    };
     let record_at = |level: tracing::Level, needle: &str| {
         page.records.iter().find(|r| {
             r.source == LogSource::HostInterface && r.level == level && r.message.contains(needle)
@@ -957,10 +971,7 @@ async fn e2e_logging_adapter_tracing_reaches_the_host_pipeline() {
     assert!(
         info.is_some(),
         "INFO facade record missing; records were: {:?}",
-        page.records
-            .iter()
-            .map(|r| (r.source, r.level, r.message.as_str()))
-            .collect::<Vec<_>>(),
+        dump(),
     );
     assert!(
         info.expect("info record").message.contains("flow=init"),
@@ -969,38 +980,39 @@ async fn e2e_logging_adapter_tracing_reaches_the_host_pipeline() {
     assert!(
         record_at(tracing::Level::WARN, "logging-venue config sighted").is_some(),
         "WARN record missing at its own level; records were: {:?}",
-        page.records
-            .iter()
-            .map(|r| (r.source, r.level, r.message.as_str()))
-            .collect::<Vec<_>>(),
+        dump(),
+    );
+    assert!(
+        record_at(tracing::Level::INFO, "logging-venue submit")
+            .is_some_and(|r| r.message.contains("body_len=4")),
+        "the verb-interior record must reach the pipeline with its fields; records were: {:?}",
+        dump(),
     );
 
-    // The whole level ladder the venue macro emits, one probe event per
-    // level: exactly one record per level, so a transposed arm (a level
-    // with no record) and a collapsed one (a level with two) both fail.
+    // The whole level ladder the venue macro emits, one self-naming probe
+    // per level. Holding each probe's message to the level it arrived at
+    // fails a transposed arm; a record count per level would not, since
+    // any permutation of the arms preserves it.
     const LEVEL_PROBE: &str = "logging-venue level probe";
-    for level in [
-        tracing::Level::TRACE,
-        tracing::Level::DEBUG,
-        tracing::Level::INFO,
-        tracing::Level::WARN,
-        tracing::Level::ERROR,
+    for (level, name) in [
+        (tracing::Level::TRACE, "trace"),
+        (tracing::Level::DEBUG, "debug"),
+        (tracing::Level::INFO, "info"),
+        (tracing::Level::WARN, "warn"),
+        (tracing::Level::ERROR, "error"),
     ] {
-        let seen = page
+        let expected = format!("{LEVEL_PROBE} {name}");
+        let levels: Vec<tracing::Level> = page
             .records
             .iter()
-            .filter(|r| {
-                r.source == LogSource::HostInterface && r.level == level && r.message == LEVEL_PROBE
-            })
-            .count();
+            .filter(|r| r.source == LogSource::HostInterface && r.message == expected)
+            .map(|r| r.level)
+            .collect();
         assert_eq!(
-            seen,
-            1,
-            "expected exactly one {level} level probe; records were: {:?}",
-            page.records
-                .iter()
-                .map(|r| (r.source, r.level, r.message.as_str()))
-                .collect::<Vec<_>>(),
+            levels,
+            vec![level],
+            "the {name} probe must arrive exactly once, at {level}; records were: {:?}",
+            dump(),
         );
     }
 }

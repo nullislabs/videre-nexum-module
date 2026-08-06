@@ -19,8 +19,10 @@ use videre_sdk::{
     VenueError,
 };
 
-/// Message of the per-level probe events `init` emits; the platform test
-/// matches on it exactly, so it must not collide with another event.
+/// Prefix of the per-level probe events `init` emits; each probe names
+/// its own level, so the platform test can hold the record's level to the
+/// message that produced it. Matched exactly, so it must not collide with
+/// another event.
 const LEVEL_PROBE: &str = "logging-venue level probe";
 
 struct LoggingVenue;
@@ -36,14 +38,15 @@ impl VenueAdapter for LoggingVenue {
             config_entries = config.len(),
             "logging-venue config sighted"
         );
-        // One probe per level, so the platform test pins the whole level
-        // ladder the venue macro emits: a transposed or collapsed arm
-        // cannot hide behind the two events above.
-        tracing::trace!("{LEVEL_PROBE}");
-        tracing::debug!("{LEVEL_PROBE}");
-        tracing::info!("{LEVEL_PROBE}");
-        tracing::warn!("{LEVEL_PROBE}");
-        tracing::error!("{LEVEL_PROBE}");
+        // One self-naming probe per level, so the platform test pins the
+        // whole level ladder the venue macro emits. The level name is in
+        // the message because a bare probe per level only pins the record
+        // count per level, which any permutation of the arms preserves.
+        tracing::trace!("{LEVEL_PROBE} trace");
+        tracing::debug!("{LEVEL_PROBE} debug");
+        tracing::info!("{LEVEL_PROBE} info");
+        tracing::warn!("{LEVEL_PROBE} warn");
+        tracing::error!("{LEVEL_PROBE} error");
         Ok(())
     }
 
