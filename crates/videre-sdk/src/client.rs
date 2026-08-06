@@ -75,6 +75,12 @@ pub trait Venue {
     /// denial drops. Static, not a method: markers are unit types, so
     /// the keeper carries this as a plain `fn` pointer
     /// ([`DenialClassifier`](crate::keeper::DenialClassifier)).
+    ///
+    /// Only a drop-class action retires a stranded reservation: classify
+    /// a denial as [`RetryAction::TryNextBlock`] and [`reconcile`] holds
+    /// the marker `RESERVED` and re-POSTs the refused body every tick.
+    ///
+    /// [`reconcile`]: crate::keeper::reconcile
     fn classify_denied(detail: &str) -> RetryAction {
         let _ = detail;
         RetryAction::Drop
