@@ -213,7 +213,11 @@ impl VenueInvoker for ScriptedAdapter {
                 gives: native(vec![1]),
                 wants: native(Vec::new()),
                 fee: native(Vec::new()),
-                valid_until_ms: 1_700_000_000_000,
+                // This registry runs on the system clock, so a past
+                // instant would turn any quote-then-submit added here
+                // into a stale-quote refusal rather than the path under
+                // test.
+                valid_until_ms: u64::MAX,
             })
         })
     }

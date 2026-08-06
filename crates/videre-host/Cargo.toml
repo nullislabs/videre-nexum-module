@@ -17,6 +17,11 @@ nexum-runtime = { git = "https://github.com/nullislabs/nexum-runtime", rev = "db
 videre-status-body = { path = "../videre-status-body" }
 
 wasmtime.workspace = true
+# `keccak256` body digests keying the quote ledger behind the registry's
+# staleness check.
+alloy-primitives.workspace = true
+# Forwarding impls for the `Clock` seam held as `Arc<dyn Clock>`.
+auto_impl.workspace = true
 anyhow.workspace = true
 derive_more.workspace = true
 thiserror.workspace = true
