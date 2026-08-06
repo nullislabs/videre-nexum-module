@@ -91,6 +91,31 @@ jobs:
       # nextest does not run doctests; keep them covered separately.
       - run: cargo test --doc --workspace --all-features --locked
 
+  wit-sync:
+    name: wit-deps sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # Pinned release binary, digest-verified: no toolchain, no compile. The job
+      # stays hermetic (fixed tool, fixed tarball pins in wit/deps.toml) and fast
+      # (one small musl binary plus the pinned source tarballs).
+      - name: install wit-deps (pinned)
+        run: |
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/wit-deps" \
+            https://github.com/bytecodealliance/wit-deps/releases/download/v0.6.0/wit-deps-x86_64-unknown-linux-musl
+          echo "0d28c03f192210e6d6a19cde0506a6127bc1a931135e1062449fea0b8db40291  $RUNNER_TEMP/wit-deps" | sha256sum -c
+          chmod +x "$RUNNER_TEMP/wit-deps"
+      # `update` ignores deps.lock, re-fetches every manifest source, and verifies
+      # the deps.toml tarball digests. (`lock` would skip the fetch, and with it the
+      # digest check, whenever the vendored tree already matches deps.lock.) A
+      # mispinned digest fails the resolve itself; a drifted vendor tree or a stale
+      # lock leaves a diff versus the checked-in wit/ tree and fails the diff step.
+      - name: re-resolve wit deps and diff against the vendored tree
+        run: |
+          "$RUNNER_TEMP/wit-deps" update
+          git add -N wit
+          git diff --exit-code -- wit
+
   docs:
     name: rustdoc
     runs-on: ubuntu-latest

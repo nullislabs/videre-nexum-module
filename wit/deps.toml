@@ -1,14 +1,18 @@
 # Cross-group WIT dependencies, vendored into wit/deps/ by wit-deps.
 #
-# Sources are pinned to the owning repo's carve rev via the github
-# archive tarball. NOTE: the sha256/sha512 for the tarball source are
-# documented placeholders for now - builds consume the vendored copy
-# under wit/deps/ (checked in), so the digests are not exercised.
-# Re-run `wit-deps update` and record the real digests when the source
-# is next refreshed. The nexum-host package lives at wit/nexum-host in
-# the nexum-runtime repo (the tarball unpacks under a
-# nexum-runtime-<rev>/ top-level directory).
+# Each entry pins the owning repo's rev via its github archive tarball.
+# The sha256/sha512 are the digests of the raw tarball bytes; wit-deps
+# verifies them on every resolve. The prefix selects the WIT package
+# directory inside the tarball.
+#
+# Re-vendor flow: edit the rev in the url, update the digests from
+# `sha256sum`/`sha512sum` of the new tarball, adjust the prefix rev,
+# then run `wit-deps update` at the repo root and commit wit/deps.toml,
+# wit/deps.lock and wit/deps/ together (`just wit-sync` checks the
+# result). The wit-sync CI job re-resolves with `wit-deps update` and
+# fails on any diff against the vendored tree.
 [nexum-host]
 url = "https://github.com/nullislabs/nexum-runtime/archive/db39b6c1959a2b8a304f4df8f014f87b4999d653.tar.gz"
-sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-sha512 = "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+sha256 = "b429b8518bd87e4166ffb4baa6ceb102caf43d3d8b26dbe15fcf854b42103542"
+sha512 = "a8a9634771d6dd7300c5c651cf7791faa9606fdbea6a78db129bc1db3896f9351081daa48d20ac6a28e30ef61a6bb9ba1cbb61f846dfb54ade88723f53033c25"
+prefix = "nexum-runtime-db39b6c1959a2b8a304f4df8f014f87b4999d653/wit/nexum-host"
