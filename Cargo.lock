@@ -5291,7 +5291,6 @@ dependencies = [
  "alloy-primitives",
  "anyhow",
  "async-trait",
- "auto_impl",
  "derive_more",
  "futures",
  "nexum-runtime",
@@ -5305,6 +5304,7 @@ dependencies = [
  "videre-host",
  "videre-status-body",
  "wasmtime",
+ "wasmtime-wasi",
 ]
 
 [[package]]

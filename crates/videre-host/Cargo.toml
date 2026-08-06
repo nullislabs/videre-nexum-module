@@ -17,11 +17,13 @@ nexum-runtime = { git = "https://github.com/nullislabs/nexum-runtime", rev = "db
 videre-status-body = { path = "../videre-status-body" }
 
 wasmtime.workspace = true
+# `HostWallClock` is the registry's clock seam: the runtime hands the
+# launch clock through `Extension::attach_clock`, so one timeline drives
+# ledger and guests.
+wasmtime-wasi.workspace = true
 # `keccak256` body digests keying the quote ledger behind the registry's
 # staleness check.
 alloy-primitives.workspace = true
-# Forwarding impls for the `Clock` seam held as `Arc<dyn Clock>`.
-auto_impl.workspace = true
 anyhow.workspace = true
 derive_more.workspace = true
 thiserror.workspace = true
