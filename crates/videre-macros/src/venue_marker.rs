@@ -50,18 +50,22 @@ impl Parse for Args {
 pub fn expand(attr: TokenStream, input: &ItemImpl) -> Result<TokenStream, syn::Error> {
     let args: Args = syn::parse2(attr)?;
     let trait_path = marker_shape(input)?;
+    // Read the crate manifest at expansion and hold the id to its
+    // registered name, alloy-`sol!`-style. Any mismatch is a
+    // compile_error, so the marker and the adapter it types cannot drift.
+    let manifest_path = manifest_id_check(&args.id)?;
+    Ok(emit(input, trait_path, &args, &manifest_path))
+}
 
+/// Emit the filled marker impl. The source body's provided-method
+/// overrides are re-emitted verbatim: drop them and a venue's
+/// `classify_denied` silently reverts to the coarse default.
+fn emit(input: &ItemImpl, trait_path: &syn::Path, args: &Args, manifest_path: &str) -> TokenStream {
     let self_ty = &input.self_ty;
     let id = &args.id;
     let body = &args.body;
     let overrides = &input.items;
-
-    // Read the crate manifest at expansion and hold the id to its
-    // registered name, alloy-`sol!`-style. Any mismatch is a
-    // compile_error, so the marker and the adapter it types cannot drift.
-    let manifest_path = manifest_id_check(id)?;
-
-    Ok(quote! {
+    quote! {
         // Rebuild anchor: an edited `[module] name` re-runs the check.
         const _: &[u8] = ::core::include_bytes!(#manifest_path);
 
@@ -71,7 +75,7 @@ pub fn expand(attr: TokenStream, input: &ItemImpl) -> Result<TokenStream, syn::E
             type Body = #body;
             #(#overrides)*
         }
-    })
+    }
 }
 
 /// Check the impl is a non-generic inherent-free `impl Venue for Marker`
@@ -147,41 +151,60 @@ fn manifest_id_check(id: &LitStr) -> Result<String, syn::Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::marker_shape;
+    use quote::quote;
+    use syn::ItemImpl;
+
+    use super::{Args, emit, marker_shape};
+
+    const OVERRIDING_MARKER: &str = "impl Venue for Marker {
+             fn classify_denied(detail: &str) -> RetryAction { RetryAction::DropOnRepeat }
+         }";
+
+    fn parse(source: &str) -> ItemImpl {
+        syn::parse_str(source).expect("the fixture parses as an impl")
+    }
 
     fn shape_error(source: &str) -> Option<String> {
-        let input = syn::parse_str(source).expect("the fixture parses as an impl");
-        marker_shape(&input).err().map(|e| e.to_string())
+        marker_shape(&parse(source)).err().map(|e| e.to_string())
     }
 
     #[test]
     fn a_provided_method_override_passes_the_shape_gate() {
-        assert_eq!(
-            shape_error(
-                "impl Venue for Cow {
-                     fn classify_denied(detail: &str) -> RetryAction { RetryAction::Drop }
-                 }",
-            ),
-            None,
+        assert_eq!(shape_error(OVERRIDING_MARKER), None);
+    }
+
+    #[test]
+    fn a_provided_method_override_reaches_the_emitted_impl() {
+        let input = parse(OVERRIDING_MARKER);
+        let trait_path = marker_shape(&input).expect("the fixture is a marker impl");
+        let args: Args =
+            syn::parse2(quote! { id = "marker", body = MarkerBody }).expect("the args parse");
+
+        let emitted = emit(&input, trait_path, &args, "module.toml").to_string();
+        assert!(emitted.contains("const ID"), "{emitted}");
+        assert!(emitted.contains("type Body = MarkerBody"), "{emitted}");
+        assert!(
+            emitted.contains("classify_denied") && emitted.contains("DropOnRepeat"),
+            "the attribute must not swallow the override: {emitted}",
         );
     }
 
     #[test]
     fn a_hand_written_id_or_body_is_rejected() {
         assert!(
-            shape_error("impl Venue for Cow { const ID: VenueId = X; }")
+            shape_error("impl Venue for Marker { const ID: VenueId = X; }")
                 .is_some_and(|e| e.contains("supplies `ID` and `Body`")),
         );
         assert!(
-            shape_error("impl Venue for Cow { type Body = X; }")
+            shape_error("impl Venue for Marker { type Body = X; }")
                 .is_some_and(|e| e.contains("supplies `ID` and `Body`")),
         );
     }
 
     #[test]
     fn a_non_venue_impl_is_rejected() {
-        assert!(shape_error("impl Other for Cow {}").is_some());
-        assert!(shape_error("impl Cow {}").is_some());
-        assert!(shape_error("impl<T> Venue for Cow<T> {}").is_some());
+        assert!(shape_error("impl Other for Marker {}").is_some());
+        assert!(shape_error("impl Marker {}").is_some());
+        assert!(shape_error("impl<T> Venue for Marker<T> {}").is_some());
     }
 }
