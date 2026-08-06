@@ -11,8 +11,9 @@ use nexum_runtime::engine_config::{AdapterEntry, EngineConfig, ModuleEntry};
 use nexum_runtime::host::component::ChainMethod;
 use nexum_runtime::host::extension::Extension;
 use nexum_runtime::supervisor::{Supervisor, build_linker};
+use nexum_runtime::test_utils::rpc::FakeNode;
 use nexum_runtime::test_utils::{
-    MockChainProvider, MockStateStore, MockTypes, mock_components_from,
+    MockStateStore, MockTypes, mock_components_from, test_chain_configs,
 };
 use videre_host::{VenueRegistry, platform};
 
@@ -61,9 +62,9 @@ async fn e2e_echo_venue_boots_and_submits_through_the_generic_seam() {
 
     // The adapter reads eth_blockNumber on submit to justify its `chain`
     // grant; program the mock so that read succeeds.
-    let chain = MockChainProvider::new();
+    let chain = FakeNode::new();
     chain.on_method(ChainMethod::EthBlockNumber, "\"0x1\"");
-    let components = mock_components_from(chain, MockStateStore::new());
+    let components = mock_components_from(&chain, MockStateStore::new());
 
     let mut engine_config = wasmtime::Config::new();
     engine_config.wasm_component_model(true);
@@ -81,6 +82,7 @@ async fn e2e_echo_venue_boots_and_submits_through_the_generic_seam() {
             path: module_wasm,
             manifest: Some(workspace_path("modules/examples/echo-client/module.toml")),
         }],
+        chains: test_chain_configs(),
         ..Default::default()
     };
     let extensions: Vec<Arc<dyn Extension<MockTypes>>> = vec![Arc::new(platform(&config))];
@@ -90,7 +92,11 @@ async fn e2e_echo_venue_boots_and_submits_through_the_generic_seam() {
         Supervisor::boot(&engine, &linker, &config, &components, &extensions, None)
             .await
             .expect("boot");
-    assert_eq!(supervisor.adapter_alive_count(), 1, "echo-venue installed");
+    let registry = supervisor
+        .services()
+        .get::<VenueRegistry>(VenueRegistry::NAMESPACE)
+        .expect("registry service");
+    assert_eq!(registry.alive_venue_count(), 1, "echo-venue installed");
     assert_eq!(supervisor.alive_count(), 1, "echo-client alive");
 
     // One block drives the worker's on_block submission; the registry the
@@ -102,10 +108,6 @@ async fn e2e_echo_venue_boots_and_submits_through_the_generic_seam() {
         timestamp: 1_700_000_000_000,
     };
     assert_eq!(supervisor.dispatch_block(block).await, 1);
-    let registry = supervisor
-        .services()
-        .get::<VenueRegistry>(VenueRegistry::NAMESPACE)
-        .expect("registry service");
     let updates = registry.poll_status_transitions().await;
     assert!(
         updates.iter().any(|u| u.venue == "echo-venue"),

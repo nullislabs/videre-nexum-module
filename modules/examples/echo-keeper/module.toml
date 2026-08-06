@@ -7,8 +7,6 @@
 [module]
 name = "echo-keeper"
 version = "0.1.0"
-# Placeholder content hash; parsed but not verified in 0.2.
-component = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
 [capabilities]
 # `client` grants the videre:venue/client import (required by

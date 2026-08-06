@@ -154,6 +154,7 @@ mod tests {
             name: name.to_owned(),
             kind: VenueAdapterKind::KIND,
             sections: sections(toml),
+            component_digest: nexum_runtime::digest::ContentDigest::of_bytes(name.as_bytes()),
         }
     }
 
