@@ -1,16 +1,22 @@
 # Cross-group WIT dependencies, vendored into wit/deps/ by wit-deps.
 #
 # Each entry pins the owning repo's rev via its github archive tarball.
-# The sha256/sha512 are the digests of the raw tarball bytes; wit-deps
-# verifies them on every resolve. The prefix selects the WIT package
-# directory inside the tarball.
+# The sha256/sha512 are the digests of the raw tarball bytes, checked
+# whenever wit-deps actually fetches: `wit-deps update` always does,
+# `wit-deps lock` skips both the fetch and the digest check while the
+# vendored tree still matches deps.lock. The prefix selects the WIT
+# package directory inside the tarball; it is not digest-covered, and a
+# prefix that matches nothing vendors an empty tree and still exits 0,
+# so only the diff against the checked-in tree catches it.
 #
 # Re-vendor flow: edit the rev in the url, update the digests from
 # `sha256sum`/`sha512sum` of the new tarball, adjust the prefix rev,
 # then run `wit-deps update` at the repo root and commit wit/deps.toml,
 # wit/deps.lock and wit/deps/ together (`just wit-sync` checks the
 # result). The wit-sync CI job re-resolves with `wit-deps update` and
-# fails on any diff against the vendored tree.
+# fails on any diff against the vendored tree. A failed resolve leaves
+# wit/deps/<pkg> deleted, so re-run `wit-deps update` once the pins are
+# right.
 [nexum-host]
 url = "https://github.com/nullislabs/nexum-runtime/archive/db39b6c1959a2b8a304f4df8f014f87b4999d653.tar.gz"
 sha256 = "b429b8518bd87e4166ffb4baa6ceb102caf43d3d8b26dbe15fcf854b42103542"

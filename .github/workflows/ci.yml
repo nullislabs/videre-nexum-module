@@ -114,7 +114,7 @@ jobs:
         run: |
           "$RUNNER_TEMP/wit-deps" update
           git add -N wit
-          git diff --exit-code -- wit
+          git --no-pager diff --exit-code -- wit
 
   docs:
     name: rustdoc

@@ -26,14 +26,16 @@ lint:
 
 # Re-resolve the WIT deps and fail on any drift against the vendored
 # wit/deps/ tree. Mirrors the wit-sync CI job. Needs the wit-deps
-# binary, which is not in the dev shell: `cargo install wit-deps-cli`
-# or the pinned release binary the CI job downloads.
+# binary, which is not in the dev shell: install the version CI pins,
+# `cargo install --locked wit-deps-cli@0.6.0`, or reuse the pinned
+# release binary the CI job downloads. An older or newer wit-deps can
+# write a different deps.lock and turn CI red.
 wit-sync:
     #!/usr/bin/env bash
     set -euo pipefail
     wit-deps update
     git add -N wit
-    git diff --exit-code -- wit
+    git --no-pager diff --exit-code -- wit
 
 # Run the full CI series locally before pushing. Mirrors
 # .github/workflows/ci.yml: rustfmt, clippy, rustdoc, the
