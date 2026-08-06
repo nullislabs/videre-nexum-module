@@ -423,15 +423,15 @@ impl VenueRegistry {
     /// valid past [`QUOTE_HORIZON_MS`] is not recorded at all, and at
     /// [`MAX_QUOTE_ENTRIES`] a new digest is refused. Either way the
     /// submit goes unchecked rather than the ledger growing.
-    fn record_quote(&self, caller: &str, venue: &VenueId, digest: B256, valid_until_ms: u64) {
+    fn record_quote(&self, caller: &str, venue: &VenueId, body: &[u8], valid_until_ms: u64) {
         let now = self.inner.clock.now_ms();
         if valid_until_ms > now.saturating_add(QUOTE_HORIZON_MS) {
             return;
         }
         let mut quotes = self.inner.quotes.lock().expect("quote ledger poisoned");
-        quotes.retain(|_, &mut until| now <= until.saturating_add(QUOTE_GRACE_MS));
+        sweep_quotes(&mut quotes, now);
         let at_cap = quotes.len() >= MAX_QUOTE_ENTRIES;
-        match quotes.entry((caller.to_owned(), venue.clone(), digest)) {
+        match quotes.entry((caller.to_owned(), venue.clone(), keccak256(body))) {
             Entry::Occupied(mut slot) => {
                 slot.insert(valid_until_ms);
             }
@@ -456,15 +456,20 @@ impl VenueRegistry {
         venue: &VenueId,
         body: &[u8],
     ) -> Result<(), VenueError> {
-        let key = (caller.to_owned(), venue.clone(), keccak256(body));
         let now = self.inner.clock.now_ms();
         let mut quotes = self.inner.quotes.lock().expect("quote ledger poisoned");
-        // Read before sweeping so this submit's own entry is checked even
-        // once expired; the sweep spares other entries a grace read past
-        // expiry, so a third party's touch cannot evict a just-expired
-        // entry ahead of its owner's submit.
+        // Nothing recorded, nothing to check: skip the body digest, which
+        // is the only unbounded work on this path.
+        if quotes.is_empty() {
+            return Ok(());
+        }
+        let key = (caller.to_owned(), venue.clone(), keccak256(body));
+        // Read before sweeping so this submit's own entry is checked at any
+        // age; the sweep spares other entries a grace read past expiry, so a
+        // third party's touch cannot evict a just-expired entry ahead of its
+        // owner's submit.
         let recorded = quotes.get(&key).copied();
-        quotes.retain(|_, &mut until| now <= until.saturating_add(QUOTE_GRACE_MS));
+        sweep_quotes(&mut quotes, now);
         match recorded {
             Some(until) if now > until => {
                 quotes.remove(&key);
@@ -476,8 +481,8 @@ impl VenueRegistry {
         }
     }
 
-    /// Submit an opaque body to `venue` for `caller`: staleness-check the
-    /// quote ledger, resolve, quota-gate, derive the header, run the
+    /// Submit an opaque body to `venue` for `caller`: resolve, quota-gate,
+    /// staleness-check the quote ledger, derive the header, run the
     /// advisory guard, forward to the adapter. Bytes this registry quoted
     /// are refused as `Denied` with the `stale-quote:` prefix once the
     /// quotation's `valid-until-ms` elapses; unquoted bytes are not
@@ -490,7 +495,6 @@ impl VenueRegistry {
         venue: &VenueId,
         body: Vec<u8>,
     ) -> Result<SubmitOutcome, VenueError> {
-        self.check_quote_freshness(caller, venue, &body)?;
         let slot = self.resolve(venue)?;
         // Gate before touching the adapter so a quota-exhausted caller never
         // reaches the adapter store or its mutex. Exhaustion is retryable
@@ -500,6 +504,9 @@ impl VenueRegistry {
                 retry_after_ms: Some(window_ms(self.inner.quota.window)),
             }));
         }
+        // Behind the gate: the check digests a guest-supplied body, so an
+        // over-quota caller cannot make the host hash it.
+        self.check_quote_freshness(caller, venue, &body)?;
         let mut adapter = slot.lock().await;
         let header = match adapter.derive_header(&body).await {
             Ok(header) => header,
@@ -556,7 +563,7 @@ impl VenueRegistry {
         let mut adapter = slot.lock().await;
         let quoted = adapter.quote(&body).await?;
         drop(adapter);
-        self.record_quote(caller, venue, keccak256(&body), quoted.valid_until_ms);
+        self.record_quote(caller, venue, &body, quoted.valid_until_ms);
         Ok(quoted)
     }
 
@@ -874,6 +881,12 @@ fn prune_expired(watched: &mut Vec<WatchedIntent>) -> usize {
     let before = watched.len();
     watched.retain(|w| w.expires_at.is_none_or(|at| now < at));
     before - watched.len()
+}
+
+/// Drop quote-ledger entries whose validity elapsed more than
+/// [`QUOTE_GRACE_MS`] ago.
+fn sweep_quotes(quotes: &mut HashMap<QuoteKey, u64>, now: u64) {
+    quotes.retain(|_, &mut until| now <= until.saturating_add(QUOTE_GRACE_MS));
 }
 
 /// Drop charge timestamps that have aged out of the window.
@@ -1350,6 +1363,35 @@ mod tests {
             .await
             .expect("unquoted bytes submit");
         assert_eq!(quote_ledger_len(&registry), 0);
+    }
+
+    #[tokio::test]
+    async fn an_over_quota_submit_never_reaches_the_quote_ledger() {
+        let calls = Arc::new(StubCalls::default());
+        let clock = Arc::new(TestClock::default());
+        clock.set(QUOTE_VALID_UNTIL_MS - 1);
+        let quota = SubmitQuota::new(1, Duration::from_secs(3600));
+        let registry = VenueRegistryBuilder::new(quota)
+            .with_clock(clock.clone())
+            .build();
+        registry
+            .install(cow(), Liveness::default(), StubAdapter::new(calls.clone()))
+            .expect("install adapter");
+
+        // The one charge in the window goes to the quote.
+        registry
+            .quote("mod-a", &cow(), b"body".to_vec())
+            .await
+            .expect("quote succeeds");
+        clock.set(QUOTE_VALID_UNTIL_MS + 1);
+
+        // Gated ahead of the ledger, so the body is never digested and the
+        // entry survives for the retry that follows the window.
+        assert!(matches!(
+            registry.submit("mod-a", &cow(), b"body".to_vec()).await,
+            Err(VenueError::RateLimited(_))
+        ));
+        assert_eq!(quote_ledger_len(&registry), 1);
     }
 
     #[tokio::test]
