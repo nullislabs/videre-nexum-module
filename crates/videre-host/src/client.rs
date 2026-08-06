@@ -20,8 +20,9 @@ fn registry<T: RuntimeTypes>(state: &HostState<T>) -> Result<Arc<VenueRegistry>,
         .ok_or(VenueError::UnknownVenue)
 }
 
-/// Validate the wire venue id at the host import. A blank id can never be
-/// installed, so it is `unknown-venue`, not a resolvable venue.
+/// Validate the wire venue id at the host import. A blank or padded id
+/// can never be installed, so it is `unknown-venue`, not a resolvable
+/// venue.
 fn venue_id(venue: String) -> Result<VenueId, VenueError> {
     VenueId::new(venue).map_err(|_| VenueError::UnknownVenue)
 }
@@ -60,17 +61,17 @@ impl<T: RuntimeTypes> Host for HostState<T> {
 mod tests {
     use super::*;
 
-    /// The seam every `Host` method routes the wire venue id through.
+    /// The seam every `Host` method routes the wire venue id through, and
+    /// the only one a padded id reaches from a guest.
     #[test]
-    fn a_blank_wire_venue_id_is_unknown_venue() {
-        assert_eq!(
-            venue_id(String::new()).unwrap_err(),
-            VenueError::UnknownVenue
-        );
-        assert_eq!(
-            venue_id("  ".to_owned()).unwrap_err(),
-            VenueError::UnknownVenue
-        );
+    fn a_blank_or_padded_wire_venue_id_is_unknown_venue() {
+        for bad in ["", "  ", "cow ", " cow", "cow\n", "cow\u{a0}"] {
+            assert_eq!(
+                venue_id(bad.to_owned()).unwrap_err(),
+                VenueError::UnknownVenue,
+                "{bad:?}",
+            );
+        }
         assert_eq!(venue_id("cow".to_owned()).expect("parses").as_str(), "cow");
     }
 }

@@ -31,8 +31,9 @@ pub struct VenueId(Cow<'static, str>);
 pub struct InvalidVenueId(String);
 
 impl VenueId {
-    /// Wrap a static id without allocating. An empty or padded literal
-    /// panics at const evaluation, so it never compiles into a marker.
+    /// Wrap a static id without allocating. An empty or padded id
+    /// panics: at const evaluation where the call site is a const, so a
+    /// [`Venue::ID`] never compiles, and at the call otherwise.
     #[must_use]
     pub const fn from_static(id: &'static str) -> Self {
         assert!(

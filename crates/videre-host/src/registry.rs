@@ -811,9 +811,10 @@ impl<T: RuntimeTypes> ProviderKind<T> for VenueAdapterKind {
             fuel_per_call,
             liveness,
         } = instance;
-        // The venue id is the adapter's namespace: its manifest name, which
-        // manifest parse already refuses blank. Re-checked here before
-        // instantiating, so no unvalidated id ever runs a guest.
+        // The venue id is the adapter's namespace: its manifest name.
+        // Manifest parse refuses a blank name but not a padded one, so
+        // this is the check that catches it, before instantiating: no
+        // unvalidated id ever runs a guest.
         let venue_id = store
             .data()
             .run
