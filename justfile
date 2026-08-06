@@ -24,11 +24,26 @@ fmt:
 lint:
     cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+# Re-resolve the WIT deps and fail on any drift against the vendored
+# wit/deps/ tree. Mirrors the wit-sync CI job. Needs the wit-deps
+# binary, which is not in the dev shell: install the version CI pins,
+# `cargo install --locked wit-deps-cli@0.6.0`, or reuse the pinned
+# release binary the CI job downloads. An older or newer wit-deps can
+# write a different deps.lock and turn CI red.
+wit-sync:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    wit-deps update
+    git add -N wit
+    git --no-pager diff --exit-code -- wit
+
 # Run the full CI series locally before pushing. Mirrors
-# .github/workflows/ci.yml one-to-one: rustfmt, clippy, rustdoc, the
+# .github/workflows/ci.yml: rustfmt, clippy, rustdoc, the
 # module wasms the integration tests need, and the workspace test
 # suite via nextest plus the doctests, all under the `-D warnings` the
-# CI workflow sets globally.
+# CI workflow sets globally. The wit-sync CI job is not in this
+# recipe because wit-deps is not in the dev shell; run `just wit-sync`
+# when you touch wit/deps.toml or the vendored tree.
 ci:
     #!/usr/bin/env bash
     set -euo pipefail
