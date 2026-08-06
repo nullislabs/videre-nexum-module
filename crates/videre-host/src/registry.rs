@@ -112,6 +112,13 @@ const QUOTE_HORIZON_MS: u64 = 3_600_000;
 /// disarming another caller's.
 const MAX_QUOTE_ENTRIES: usize = 1024;
 
+/// How long an expired entry survives the sweep. Any ledger touch
+/// sweeps, including a third party's: without a grace read it could
+/// evict a just-expired entry ahead of the owner's submit, which would
+/// then find no entry and pass unchecked. An entry is retained until
+/// `now > valid-until-ms + QUOTE_GRACE_MS`.
+const QUOTE_GRACE_MS: u64 = 30_000;
+
 /// Egress interposition run on the derived header between `derive-header`
 /// and `submit`. Advisory-only: a `Deny` is logged, the submission proceeds.
 pub trait EgressGuard: Send + Sync {
@@ -322,10 +329,11 @@ struct VenueRegistryInner {
     /// [`WatchLimit`] overflow.
     watched: Mutex<Vec<WatchedIntent>>,
     clock: Arc<dyn Clock>,
-    /// Quoted body digests mapped to their `valid-until-ms`; expired
-    /// entries sweep on every touch, and [`record_quote`] admits neither
-    /// beyond [`QUOTE_HORIZON_MS`] nor past [`MAX_QUOTE_ENTRIES`], so a
-    /// guest cannot grow this without bound.
+    /// Quoted body digests mapped to their `valid-until-ms`; entries
+    /// expired past [`QUOTE_GRACE_MS`] sweep on every touch, and
+    /// [`record_quote`] admits neither beyond [`QUOTE_HORIZON_MS`] nor
+    /// past [`MAX_QUOTE_ENTRIES`], so a guest cannot grow this without
+    /// bound.
     ///
     /// [`record_quote`]: VenueRegistry::record_quote
     quotes: Mutex<HashMap<QuoteKey, u64>>,
@@ -421,7 +429,7 @@ impl VenueRegistry {
             return;
         }
         let mut quotes = self.inner.quotes.lock().expect("quote ledger poisoned");
-        quotes.retain(|_, &mut until| now <= until);
+        quotes.retain(|_, &mut until| now <= until.saturating_add(QUOTE_GRACE_MS));
         let at_cap = quotes.len() >= MAX_QUOTE_ENTRIES;
         match quotes.entry((caller.to_owned(), venue.clone(), digest)) {
             Entry::Occupied(mut slot) => {
@@ -451,12 +459,19 @@ impl VenueRegistry {
         let key = (caller.to_owned(), venue.clone(), keccak256(body));
         let now = self.inner.clock.now_ms();
         let mut quotes = self.inner.quotes.lock().expect("quote ledger poisoned");
+        // Read before sweeping so this submit's own entry is checked even
+        // once expired; the sweep spares other entries a grace read past
+        // expiry, so a third party's touch cannot evict a just-expired
+        // entry ahead of its owner's submit.
         let recorded = quotes.get(&key).copied();
-        quotes.retain(|_, &mut until| now <= until);
+        quotes.retain(|_, &mut until| now <= until.saturating_add(QUOTE_GRACE_MS));
         match recorded {
-            Some(until) if now > until => Err(VenueError::Denied(format!(
-                "stale-quote: valid-until-ms {until} elapsed at {now}"
-            ))),
+            Some(until) if now > until => {
+                quotes.remove(&key);
+                Err(VenueError::Denied(format!(
+                    "stale-quote: valid-until-ms {until} elapsed at {now}"
+                )))
+            }
             _ => Ok(()),
         }
     }
@@ -1325,14 +1340,47 @@ mod tests {
             .await
             .expect("quote succeeds");
         assert_eq!(quote_ledger_len(&registry), 1);
-        clock.set(QUOTE_VALID_UNTIL_MS + 1);
+        clock.set(QUOTE_VALID_UNTIL_MS + QUOTE_GRACE_MS + 1);
 
-        // Any ledger touch sweeps expired entries: a submit of different
-        // bytes drops the stale record it never matched.
+        // Any ledger touch sweeps entries expired past the grace read: a
+        // submit of different bytes drops the stale record it never
+        // matched.
         registry
             .submit("mod-a", &cow(), b"other".to_vec())
             .await
             .expect("unquoted bytes submit");
+        assert_eq!(quote_ledger_len(&registry), 0);
+    }
+
+    #[tokio::test]
+    async fn a_stale_submit_is_refused_after_a_third_party_sweep() {
+        let calls = Arc::new(StubCalls::default());
+        let clock = Arc::new(TestClock::default());
+        clock.set(QUOTE_VALID_UNTIL_MS - 1);
+        let registry = registry_at(clock.clone(), StubAdapter::new(calls.clone()));
+
+        registry
+            .quote("mod-a", &cow(), b"body".to_vec())
+            .await
+            .expect("quote succeeds");
+        clock.set(QUOTE_VALID_UNTIL_MS + 1);
+
+        // A third party touches the ledger while mod-a's entry is expired
+        // but within grace: the sweep must not evict it.
+        registry
+            .submit("mod-b", &cow(), b"other".to_vec())
+            .await
+            .expect("unquoted bytes submit");
+        assert_eq!(quote_ledger_len(&registry), 1);
+
+        let err = registry
+            .submit("mod-a", &cow(), b"body".to_vec())
+            .await
+            .expect_err("stale quote still refused after the sweep");
+        assert!(matches!(err, VenueError::Denied(r) if r.starts_with("stale-quote: ")));
+        // Only mod-b's submit reached the adapter, and the refusal removed
+        // the entry.
+        assert_eq!(calls.submit.load(Ordering::SeqCst), 1);
         assert_eq!(quote_ledger_len(&registry), 0);
     }
 
