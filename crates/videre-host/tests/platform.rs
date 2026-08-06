@@ -39,8 +39,6 @@ use common::{module_wasm_or_skip, workspace_path};
 /// The subscription kind the platform's status poller emits.
 const INTENT_STATUS: &str = "intent-status";
 
-// ── fixtures + assembly ───────────────────────────────────────────────
-
 /// A test venue id, parsed through the validating boundary.
 fn venue(id: &str) -> VenueId {
     id.parse().expect("valid venue id")
@@ -97,8 +95,6 @@ fn status_event(update: videre_host::IntentStatusUpdate) -> ExtensionEvent {
         }),
     }
 }
-
-// ── world contract ────────────────────────────────────────────────────
 
 /// An adapter built through `#[videre_sdk::venue]` imports exactly the
 /// scoped transport its manifest declares (`chain`).
@@ -191,8 +187,6 @@ fn e2e_logging_venue_component_imports_logging_when_declared() {
         "imports were: {imports:?}"
     );
 }
-
-// ── intent-status subscription E2E ────────────────────────────────────
 
 /// Scripted registry adapter: accepts every submission with a fixed receipt
 /// and serves statuses front-first; once drained, reports `open`.
@@ -600,8 +594,6 @@ async fn event_source_stays_closed_without_subscribers_or_venues() {
     let streams = Extension::<MockTypes>::events(&*no_venue, &mut sources).expect("events");
     assert!(streams.is_empty(), "no venue, no stream");
 }
-
-// ── echo round trip ───────────────────────────────────────────────────
 
 /// End to end over two real components: the echo-client module submits
 /// through `videre:venue/client`, the host registry forwards to the
@@ -1141,8 +1133,6 @@ optional = []
     assert!(chain.contains("not listed in [capabilities]"), "{chain}");
 }
 
-// ── venue-adapter trap recovery ───────────────────────────────────────
-
 /// Boot one flaky-venue adapter over the mock chain, its head at the
 /// fixture's poison sentinel. Returns the chain handle for recovery.
 async fn boot_flaky_venue(
@@ -1261,8 +1251,6 @@ async fn e2e_crash_looping_adapter_is_poisoned() {
         Err(VenueError::Unavailable(_))
     ));
 }
-
-// ── service-missing unknown-venue ─────────────────────────────────────
 
 /// The videre platform with its registry service withheld: `service`
 /// returns `None`, so `HostServices::from_extensions` seeds no venue
