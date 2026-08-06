@@ -618,7 +618,8 @@ impl VenueRegistry {
         adapter.cancel(receipt).await
     }
 
-    /// Number of installed, routable adapters.
+    /// Number of installed adapters, dead ones included: an entry outlives
+    /// its liveness so the restart sweep can replace it in place.
     pub fn venue_count(&self) -> usize {
         self.inner
             .adapters
@@ -627,7 +628,8 @@ impl VenueRegistry {
             .len()
     }
 
-    /// Number of installed adapters whose shared liveness is alive.
+    /// Number of routable adapters: installed and alive on the liveness the
+    /// supervisor shares.
     pub fn alive_venue_count(&self) -> usize {
         self.inner
             .adapters
@@ -681,10 +683,9 @@ impl<T: RuntimeTypes> ProviderKind<T> for VenueAdapterKind {
             fuel_per_call,
             liveness,
         } = instance;
-        // The venue id is the adapter's namespace: its manifest name.
-        // Checked before instantiating, so a blank name never runs the
-        // guest. An empty name cannot reach here: the runtime substitutes
-        // its own fallback namespace, so only whitespace-only fails.
+        // The venue id is the adapter's namespace: its manifest name, which
+        // manifest parse already refuses blank. Re-checked here before
+        // instantiating, so no unvalidated id ever runs a guest.
         let venue_id = store
             .data()
             .run
