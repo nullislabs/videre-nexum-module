@@ -1467,13 +1467,9 @@ mod tests {
     }
 
     #[test]
-    fn sweep_and_free_fn_agree() {
-        // The free-fn side (GRACE_DENIAL softens to DropOnRepeat) is
-        // marker_classification_reaches_the_generic_path; the default
-        // keeper's first-refusal drop is
-        // non_retryable_refusal_drops_the_watch. Here: the sweep under
-        // the marker's classifier applies that same action, so the first
-        // refusal keeps the watch (the grace)...
+    fn a_softened_denial_keeps_the_watch_then_drops_on_the_repeat() {
+        // The sweep applies the action the free fn derives under the same
+        // classifier, so the first refusal keeps the watch (the grace)...
         let host = MockLocalStore::default();
         put_watch(&host);
         let venue = StubVenue::new(Err(VenueFault::Denied(GRACE_DENIAL.into())));
@@ -1510,8 +1506,6 @@ mod tests {
         assert_eq!(report.reconciled_pending, 0);
         assert_eq!(report.reconciled_released, 1);
         assert_eq!(mark(&host, b"order"), None);
-        // The default-classification release is
-        // reconcile_terminal_refusal_releases_and_stays_gone.
     }
 
     #[test]

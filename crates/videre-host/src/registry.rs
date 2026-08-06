@@ -39,8 +39,8 @@ use crate::bindings::{
 };
 
 /// Venue identifier an adapter registers under. Opaque beyond equality
-/// and never empty or whitespace-only: every construction path validates
-/// ([`VenueId::new`]).
+/// and never empty or whitespace-only: the field is private, so
+/// [`VenueId::new`] is the only constructor.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, derive_more::AsRef, derive_more::Display)]
 pub struct VenueId(#[as_ref(str)] String);
 
@@ -414,9 +414,9 @@ impl VenueRegistry {
     }
 
     /// Record a successful quote so [`submit`](Self::submit) can
-    /// staleness-check the same bytes; past [`QUOTE_HORIZON_MS`] or at
-    /// [`MAX_QUOTE_ENTRIES`] the quote goes unrecorded and its submit
-    /// unchecked.
+    /// staleness-check the same bytes; past [`QUOTE_HORIZON_MS`], or at
+    /// [`MAX_QUOTE_ENTRIES`] for a digest not already recorded, the
+    /// quote goes unrecorded and its submit unchecked.
     fn record_quote(&self, caller: &str, venue: &VenueId, body: &[u8], valid_until_ms: u64) {
         let now = self.inner.clock.now_ms();
         if valid_until_ms > now.saturating_add(QUOTE_HORIZON_MS) {
@@ -1560,14 +1560,6 @@ mod tests {
         }
         assert_eq!(quote_ledger_len(&registry), MAX_QUOTE_ENTRIES);
 
-        // An over-cap quote goes unrecorded: its own submit degrades to
-        // unchecked (accepted here) rather than denied, while the live
-        // entries stay armed.
-        registry
-            .submit("mod-a", &cow(), 1_030u32.to_le_bytes().to_vec())
-            .await
-            .expect("an over-cap quote's submit is unchecked");
-
         // A live entry is never evicted to make room: the first body
         // quoted still refuses once its validity elapses.
         clock.set(now + QUOTE_HORIZON_MS + 1);
@@ -1576,6 +1568,13 @@ mod tests {
             .await
             .expect_err("the first recorded quote is still bound");
         assert!(matches!(err, VenueError::Denied(r) if r.starts_with("stale-quote: ")));
+
+        // At the same instant an over-cap body submits: it was never
+        // recorded, so it degrades to unchecked instead of refused.
+        registry
+            .submit("mod-a", &cow(), (overflow - 1).to_le_bytes().to_vec())
+            .await
+            .expect("an over-cap quote's submit is unchecked");
     }
 
     #[tokio::test]
@@ -1611,7 +1610,7 @@ mod tests {
             .await
             .expect_err("unknown venue rejected");
 
-        assert!(matches!(err, VenueError::UnknownVenue));
+        assert_eq!(err, VenueError::UnknownVenue);
         assert_eq!(calls.derive.load(Ordering::SeqCst), 0);
         assert_eq!(calls.submit.load(Ordering::SeqCst), 0);
     }
@@ -1720,10 +1719,13 @@ mod tests {
             StubAdapter::new(calls.clone()),
         );
 
-        assert!(matches!(
-            registry.quote("mod-a", &unlisted(), b"b".to_vec()).await,
-            Err(VenueError::UnknownVenue)
-        ));
+        assert_eq!(
+            registry
+                .quote("mod-a", &unlisted(), b"b".to_vec())
+                .await
+                .unwrap_err(),
+            VenueError::UnknownVenue
+        );
         assert_eq!(calls.quote.load(Ordering::SeqCst), 0);
     }
 
@@ -1917,10 +1919,13 @@ mod tests {
             registry.submit("mod-a", &cow(), b"b".to_vec()).await,
             Err(VenueError::Unavailable(_))
         ));
-        assert!(matches!(
-            registry.submit("mod-a", &unlisted(), b"b".to_vec()).await,
-            Err(VenueError::UnknownVenue)
-        ));
+        assert_eq!(
+            registry
+                .submit("mod-a", &unlisted(), b"b".to_vec())
+                .await
+                .unwrap_err(),
+            VenueError::UnknownVenue
+        );
         assert_eq!(calls.derive.load(Ordering::SeqCst), 0);
     }
 
@@ -2018,10 +2023,10 @@ mod tests {
             None,
             StubAdapter::new(Arc::new(StubCalls::default())),
         );
-        assert!(matches!(
-            registry.observe(&unlisted(), b"r".to_vec()),
-            Err(VenueError::UnknownVenue)
-        ));
+        assert_eq!(
+            registry.observe(&unlisted(), b"r".to_vec()).unwrap_err(),
+            VenueError::UnknownVenue
+        );
         assert_eq!(registry.watched_count(), 0);
     }
 

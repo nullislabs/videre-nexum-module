@@ -310,14 +310,14 @@ fn empty_receipt_is_rejected_before_the_transport() {
     // The unbound venue would report unknown-venue, so invalid-receipt
     // proves the guard fires before the transport is consulted.
     let client = VenueClient::<NowhereVenue, _>::with_transport(InProcessClient);
-    assert!(matches!(
+    assert_eq!(
         run(client.status(&[])).unwrap_err(),
         ClientError::Venue(VenueFault::InvalidReceipt)
-    ));
-    assert!(matches!(
+    );
+    assert_eq!(
         run(client.cancel(&[])).unwrap_err(),
         ClientError::Venue(VenueFault::InvalidReceipt)
-    ));
+    );
 }
 
 #[test]
