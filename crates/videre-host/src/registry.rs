@@ -305,13 +305,12 @@ struct VenueRegistryInner {
     /// Receipts under status watch; pruned on terminal status, expiry, or
     /// [`WatchLimit`] overflow.
     watched: Mutex<Vec<WatchedIntent>>,
-    /// Wall clock behind the quote-staleness check. The runtime installs
-    /// the launch clock through [`Extension::attach_clock`] before link;
-    /// an unset slot reads the real host clock, so a standalone registry
-    /// works without one.
+    /// Wall clock behind the quote-staleness check, the real host clock
+    /// until a launch installs its own through [`Extension::attach_clock`],
+    /// so a standalone registry works without one.
     ///
     /// [`Extension::attach_clock`]: nexum_runtime::host::extension::Extension::attach_clock
-    clock: Mutex<Option<Arc<dyn HostWallClock + Send + Sync>>>,
+    clock: Mutex<Arc<dyn HostWallClock + Send + Sync>>,
     /// Quoted body digests mapped to their `valid-until-ms`; entries
     /// expired past [`QUOTE_GRACE_MS`] sweep on every touch and
     /// [`record_quote`] bounds admission, so a guest cannot grow this
@@ -405,16 +404,14 @@ impl VenueRegistry {
     /// replaces the earlier one, and the slot's lock serialises concurrent
     /// installs.
     pub(crate) fn set_wall_clock(&self, wall: Arc<dyn HostWallClock + Send + Sync>) {
-        *self.inner.clock.lock().expect("clock slot poisoned") = Some(wall);
+        *self.inner.clock.lock().expect("clock slot poisoned") = wall;
     }
 
-    /// The quote ledger's reading of now: the attached wall clock, or the
-    /// real host clock until one is attached.
+    /// The quote ledger's reading of now. The handle is cloned out first:
+    /// a clock is caller-supplied code, never run under the slot's lock.
     fn ledger_now_ms(&self) -> u64 {
-        match &*self.inner.clock.lock().expect("clock slot poisoned") {
-            Some(clock) => now_ms(&**clock),
-            None => now_ms(&wasmtime_wasi::clocks::WallClock::default()),
-        }
+        let clock = Arc::clone(&self.inner.clock.lock().expect("clock slot poisoned"));
+        saturating_ms(clock.now())
     }
 
     /// Record a successful quote so [`submit`](Self::submit) can
@@ -875,12 +872,6 @@ fn saturating_ms(d: Duration) -> u64 {
     u64::try_from(d.as_millis()).unwrap_or(u64::MAX)
 }
 
-/// The clock's wall reading as unix-epoch milliseconds, saturating at
-/// `u64::MAX`.
-fn now_ms(clock: &dyn HostWallClock) -> u64 {
-    saturating_ms(clock.now())
-}
-
 /// Drop watch entries whose eviction deadline has passed, returning how
 /// many were evicted.
 fn prune_expired(watched: &mut Vec<WatchedIntent>) -> usize {
@@ -915,19 +906,19 @@ pub struct VenueRegistryBuilder {
     guard: Arc<dyn EgressGuard>,
     quota: SubmitQuota,
     watch_limit: WatchLimit,
-    clock: Option<Arc<dyn HostWallClock + Send + Sync>>,
+    clock: Arc<dyn HostWallClock + Send + Sync>,
 }
 
 impl VenueRegistryBuilder {
     /// Builder with the given quota, the unit guard, the default watch
-    /// limit, and an empty clock slot: under a runtime launch,
-    /// `Extension::attach_clock` supplies the wall clock.
+    /// limit, and the real host wall clock: under a runtime launch,
+    /// `Extension::attach_clock` replaces the clock at boot.
     pub fn new(quota: SubmitQuota) -> Self {
         Self {
             guard: Arc::new(()),
             quota,
             watch_limit: WatchLimit::default(),
-            clock: None,
+            clock: Arc::new(wasmtime_wasi::clocks::WallClock::default()),
         }
     }
 
@@ -948,7 +939,7 @@ impl VenueRegistryBuilder {
     /// Under a runtime launch, `Extension::attach_clock` replaces it with
     /// the launch clock.
     pub fn with_clock(mut self, clock: Arc<dyn HostWallClock + Send + Sync>) -> Self {
-        self.clock = Some(clock);
+        self.clock = clock;
         self
     }
 
