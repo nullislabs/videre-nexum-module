@@ -110,6 +110,9 @@ mod tests {
         );
         assert!(world.wit.contains("export videre:venue/adapter@0.1.0;"));
         assert_eq!(world.packages, VENUE_PACKAGES);
+        // Deliberate mirror-the-module-synthesis pin: every declared
+        // capability's adapter ident passes through, not only the
+        // `logging` ident the venue macro consumes today.
         assert_eq!(world.adapters, vec!["chain"]);
     }
 

@@ -49,8 +49,8 @@ const VENUE_KIND: &str = "venue-adapter";
 /// With `logging` declared, the expansion also emits `install_tracing`,
 /// binding the standard `nexum_sdk` tracing facade (and panic hook) to the
 /// adapter's `nexum:host/logging` import; call it once at the top of
-/// `init`. Without the declaration the function does not exist, so the
-/// facade cannot bind to an undeclared import. The host verb carries only
+/// `init`. Without the declaration the function does not exist. The host
+/// verb carries only
 /// a level and a message, so an event's fields render into the message
 /// (`msg key=value ...`) and its target is dropped; spans are inert.
 ///
@@ -129,11 +129,14 @@ pub fn venue(attr: TokenStream, item: TokenStream) -> TokenStream {
     let inline_world = &venue_world.wit;
     // The guest tracing-facade glue rides the declared `logging`
     // capability's adapter ident, mirroring how the module glue selects
-    // its host-adapter pieces. The venue world remaps `nexum:host/types`
-    // onto the SDK bindings, so `nexum_sdk`'s own bindgen glue (whose
-    // fault conversions must be local to the emitting crate) cannot be
-    // reused here; only the logging slice is emitted, over the crate's
-    // freshly generated `nexum::host::logging` module.
+    // its host-adapter pieces. `nexum_sdk`'s per-cap
+    // `__bind_host_cap_via_wit_bindgen!(logging)` arm is doc(hidden)
+    // internal API that expects a caller-supplied `WitBindgenHost`, and
+    // its entry macro's base pieces clash with this world's
+    // `nexum:host/types` remap, so the logging slice is restated here
+    // over the crate's freshly generated `nexum::host::logging` module.
+    // Collapse both into one invocation if nexum-runtime promotes the
+    // tracing-sink slice to a public macro.
     let logging_glue = venue_world.adapters.contains(&"logging").then(|| {
         quote! {
             /// Routes guest `tracing` events to the adapter's

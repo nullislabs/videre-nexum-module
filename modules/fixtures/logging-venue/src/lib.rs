@@ -4,7 +4,7 @@
 //! the standard tracing facade the `#[videre_sdk::venue]` expansion emits
 //! for a logging-declaring adapter, then reports adapter-interior facts
 //! as structured `tracing` events. The platform tests assert those events
-//! reach the host log pipeline with level and fields intact. Test-only.
+//! reach the host log pipeline with level and fields intact.
 
 // wit_bindgen::generate! expands to host-import shims whose arity matches
 // the WIT signatures, which can exceed clippy's too-many-arguments threshold.
@@ -88,7 +88,6 @@ impl VenueAdapter for LoggingVenue {
     }
 }
 
-/// A zero native amount.
 fn zero_native() -> AssetAmount {
     AssetAmount {
         asset: Asset::Native,
