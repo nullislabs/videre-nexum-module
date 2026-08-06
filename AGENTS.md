@@ -48,7 +48,7 @@ A missing wasm fails the test instead of skipping it; set `VIDERE_SKIP_MISSING_W
 
 The hooks in `.claude/hooks/` support this loop: `rustfmt-on-edit.sh` formats each edited `.rs` file.
 `nextest-on-stop.sh` runs nextest at the end of a turn, for the crates that own the changed `.rs` files.
-`content-lint.sh` blocks an edit that adds an em-dash to a `.rs` or `.md` file.
+`content-lint.sh` blocks an edit that adds an em-dash or a banner comment to a `.rs` or `.md` file.
 The hooks run only on NixOS: each one exits at once when `/etc/NIXOS` is absent.
 Each hook also exits without an effect when its tool is absent, so the hooks do nothing outside the dev shell.
 
@@ -64,6 +64,8 @@ Cross-repo dependencies are pinned by git rev in the crate manifests: bump a pin
 
 Do not use em-dashes in source, in docs, in commit messages, or in a PR or issue body.
 Use an ASCII hyphen, a colon, or split the sentence, because `.claude/hooks/content-lint.sh` blocks an em-dash in a `.rs` or `.md` file.
+Do not use a banner or section-divider line comment.
+A section is a module boundary: split the file or add nothing, because `.claude/hooks/content-lint.sh` blocks a new banner line in a `.rs` or `.md` file.
 Write each commit message as a [Conventional Commit](https://www.conventionalcommits.org/) with an imperative subject.
 Disclose AI assistance with one honest line in the commit message and in the PR body: `AI Assistance: <tool> used for <what>`.
 Never add a `Co-Authored-By: Claude Code` trailer or a `Generated with Claude Code` line.
