@@ -1,7 +1,9 @@
 //! E2E coverage for the videre platform over the generic runtime seam: the
 //! venue-adapter provider boot, the client -> registry -> adapter round
 //! trip, the status-poll event source, and the trap-to-recovery sweeps.
-//! Skips gracefully when a wasm artefact is absent.
+//! A missing wasm artefact skips locally and hard-fails in CI.
+
+mod common;
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -32,41 +34,16 @@ use videre_host::{
 };
 use wasmtime::component::Linker;
 
+use common::{module_wasm_or_skip, workspace_path};
+
 /// The subscription kind the platform's status poller emits.
 const INTENT_STATUS: &str = "intent-status";
 
 // ── fixtures + assembly ───────────────────────────────────────────────
 
-/// Path under the workspace root (the topmost ancestor with a `Cargo.toml`).
-fn workspace_path(relative: &str) -> PathBuf {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    manifest
-        .ancestors()
-        .filter(|d| d.join("Cargo.toml").is_file())
-        .last()
-        .unwrap_or(manifest)
-        .join(relative)
-}
-
 /// A test venue id, parsed through the validating boundary.
 fn venue(id: &str) -> VenueId {
     id.parse().expect("valid venue id")
-}
-
-/// Path to a module's `.wasm` artefact under the workspace target dir,
-/// or `None` with a skip message when it is not built.
-fn module_wasm_or_skip(module_name: &str) -> Option<PathBuf> {
-    let artifact = module_name.replace('-', "_");
-    let p = workspace_path(&format!("target/wasm32-wasip2/release/{artifact}.wasm"));
-    if p.exists() {
-        Some(p)
-    } else {
-        eprintln!(
-            "SKIP: {} not found - build with `cargo build -p {module_name} --target wasm32-wasip2 --release`",
-            p.display()
-        );
-        None
-    }
 }
 
 fn make_wasmtime_engine() -> wasmtime::Engine {

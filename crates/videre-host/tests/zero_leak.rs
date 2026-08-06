@@ -2,7 +2,8 @@
 //! submission purely through the generic extension seam, while the
 //! `nexum-runtime` crate graph reaches no venue-shaped crate.
 
-use std::path::{Path, PathBuf};
+mod common;
+
 use std::process::Command;
 use std::sync::Arc;
 
@@ -17,37 +18,7 @@ use nexum_runtime::test_utils::{
 };
 use videre_host::{VenueRegistry, platform};
 
-/// Path under the workspace root (the topmost ancestor with a `Cargo.toml`).
-fn workspace_path(relative: &str) -> PathBuf {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    manifest
-        .ancestors()
-        .filter(|d| d.join("Cargo.toml").is_file())
-        .last()
-        .unwrap_or(manifest)
-        .join(relative)
-}
-
-/// Path to a module's `.wasm` artefact under the workspace target dir.
-/// A missing artefact is a hard failure under CI (the gate may not skip
-/// itself) and a soft skip locally.
-fn module_wasm_or_skip(module_name: &str) -> Option<PathBuf> {
-    let artifact = module_name.replace('-', "_");
-    let p = workspace_path(&format!("target/wasm32-wasip2/release/{artifact}.wasm"));
-    if p.exists() {
-        return Some(p);
-    }
-    assert!(
-        std::env::var_os("CI").is_none(),
-        "{} must be prebuilt in CI",
-        p.display()
-    );
-    eprintln!(
-        "SKIP: {} not found - build with `cargo build -p {module_name} --target wasm32-wasip2 --release`",
-        p.display()
-    );
-    None
-}
+use common::{module_wasm_or_skip, workspace_path};
 
 /// The boot oracle: the venue adapter installs and a worker's submission
 /// reaches it, with the platform supplied only as a generic extension.
