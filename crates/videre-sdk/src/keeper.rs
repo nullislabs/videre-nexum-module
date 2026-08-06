@@ -210,11 +210,15 @@ impl<S, P: VenueTransport> Keeper<S, P> {
                 Outcome::Backoff { seconds } => RetryAction::Backoff { seconds },
                 Outcome::Drop => RetryAction::Drop,
             };
-            match action {
-                RetryAction::Drop => report.dropped += 1,
-                _ => report.retried += 1,
-            }
             retrier.apply(watch, action, tick)?;
+            // Bucket by the Retrier's effect, not the action: the tick
+            // that removes the watch counts as dropped, so a
+            // `DropOnRepeat` retirement is visible under `dropped`.
+            if host.contains(&watch.key())? {
+                report.retried += 1;
+            } else {
+                report.dropped += 1;
+            }
         }
         Ok(report)
     }
@@ -320,11 +324,11 @@ pub struct RunReport {
     /// Bodies an earlier run journalled, skipped without a venue call.
     pub duplicates: usize,
     /// Watches left in place for a later tick, plus submit arms the
-    /// reconcile pass already owns this tick. Buckets follow the
-    /// [`RetryAction`], not the [`Retrier`] effect, so the repeat tick
-    /// that retires a [`RetryAction::DropOnRepeat`] watch counts here.
+    /// reconcile pass already owns this tick.
     pub retried: usize,
-    /// Watches a [`RetryAction::Drop`] removed.
+    /// Watches this run removed. Buckets follow the [`Retrier`] effect,
+    /// so the repeat tick that retires a [`RetryAction::DropOnRepeat`]
+    /// watch counts here.
     pub dropped: usize,
     /// Stranded reservations the reconcile pass committed this tick.
     pub reconciled_committed: usize,
@@ -1485,11 +1489,15 @@ mod tests {
         assert_eq!(WatchSet::new(&host).list().expect("list reads").len(), 1);
 
         // ...and a repeat at a later block removes it, per DropOnRepeat.
+        // The retirement tick counts as dropped: buckets follow the
+        // Retrier's effect, not the softened action.
         let later = Tick {
             block: TICK.block + 1,
             ..TICK
         };
-        run(sweep.run(&host, &later)).expect("keeper runs");
+        let report = run(sweep.run(&host, &later)).expect("keeper runs");
+        assert_eq!(report.dropped, 1);
+        assert_eq!(report.retried, 0);
         assert!(WatchSet::new(&host).list().expect("list reads").is_empty());
     }
 
