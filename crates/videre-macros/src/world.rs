@@ -4,28 +4,31 @@
 
 pub use nexum_world::ModuleWorld;
 
-/// Capabilities a venue adapter may import: scoped transport only (chain,
-/// messaging, and HTTP via the SDK's wasi:http client). `local-store`,
-/// `remote-store`, `identity`, and `logging` are refused.
-const VENUE_CAPABILITIES: &[&str] = &["chain", "messaging", "http"];
+/// Capabilities a venue adapter may import: scoped transport (chain,
+/// messaging, and HTTP via the SDK's wasi:http client) plus `logging`,
+/// which grants no authority beyond emitting records the host already
+/// accepts from every module world. `local-store`, `remote-store`, and
+/// `identity` are refused.
+const VENUE_CAPABILITIES: &[&str] = &["chain", "messaging", "http", "logging"];
 
 /// Build the venue-adapter world from the declared capability names: exports
 /// `init` and the `videre:venue/adapter` face, imports exactly the declared
-/// scoped transport. A capability outside the venue-permitted set is a
-/// compile error.
+/// scoped transport plus logging. A capability outside the venue-permitted
+/// set is a compile error.
 pub fn synthesize_venue(declared: &[String]) -> Result<ModuleWorld, String> {
     for name in declared {
         if !VENUE_CAPABILITIES.contains(&name.as_str()) {
             let permitted = VENUE_CAPABILITIES.join(", ");
             return Err(format!(
                 "capability `{name}` is not available to a venue adapter; a venue may import \
-                 only scoped transport ({permitted}) and structurally cannot touch local-store, \
-                 remote-store, identity, or logging"
+                 only scoped transport plus logging ({permitted}) and structurally cannot touch \
+                 local-store, remote-store, or identity"
             ));
         }
     }
 
     let mut imports = String::new();
+    let mut adapters = Vec::new();
     // The export face (`videre:venue/adapter`, its types, and the
     // value-flow vocabulary they are expressed in) needs the videre
     // packages on the resolve path beyond the leaf host package, in
@@ -56,6 +59,13 @@ pub fn synthesize_venue(declared: &[String]) -> Result<ModuleWorld, String> {
                 packages.push((*package).to_owned());
             }
         }
+        // Pass the capability's host-adapter ident through, mirroring the
+        // module synthesis. The venue export glue binds no host trait, but
+        // the `logging` ident tells the venue macro to emit the guest
+        // tracing-facade glue over the declared import.
+        if let Some(adapter) = cap.adapter {
+            adapters.push(adapter);
+        }
     }
 
     let mut wit = String::from(
@@ -71,10 +81,7 @@ pub fn synthesize_venue(declared: &[String]) -> Result<ModuleWorld, String> {
     Ok(ModuleWorld {
         wit,
         packages,
-        // The venue export glue wires the adapter's associated functions
-        // to the world's Guest traits directly; there is no host-trait
-        // adapter to bind, so no capability idents to pass on.
-        adapters: Vec::new(),
+        adapters,
     })
 }
 
@@ -103,7 +110,7 @@ mod tests {
         );
         assert!(world.wit.contains("export videre:venue/adapter@0.1.0;"));
         assert_eq!(world.packages, VENUE_PACKAGES);
-        assert!(world.adapters.is_empty());
+        assert_eq!(world.adapters, vec!["chain"]);
     }
 
     #[test]
@@ -130,17 +137,24 @@ mod tests {
         let world = synthesize_venue(&[]).unwrap();
         assert!(!world.wit.contains("import"));
         assert!(world.wit.contains("export videre:venue/adapter@0.1.0;"));
+        assert!(world.adapters.is_empty());
+    }
+
+    #[test]
+    fn venue_world_imports_logging_when_declared() {
+        let world = synthesize_venue(&["logging".to_string()]).unwrap();
+        assert!(world.wit.contains("import nexum:host/logging@0.1.0;"));
+        assert_eq!(world.packages, VENUE_PACKAGES);
+        assert_eq!(world.adapters, vec!["logging"]);
+
+        let without = synthesize_venue(&["chain".to_string()]).unwrap();
+        assert!(!without.wit.contains("nexum:host/logging"));
+        assert!(!without.adapters.contains(&"logging"));
     }
 
     #[test]
     fn venue_world_refuses_non_transport_capabilities() {
-        for cap in [
-            "local-store",
-            "remote-store",
-            "identity",
-            "logging",
-            "client",
-        ] {
+        for cap in ["local-store", "remote-store", "identity", "client"] {
             let err = synthesize_venue(&[cap.to_string()]).unwrap_err();
             assert!(err.contains(cap), "message was: {err}");
             assert!(err.contains("venue adapter"), "message was: {err}");

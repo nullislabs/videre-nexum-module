@@ -10,7 +10,7 @@ build-venue:
 # Build every guest module wasm in this repo (examples + fixtures).
 build-modules:
     cargo build --target wasm32-wasip2 --release \
-        -p echo-venue -p echo-client -p echo-keeper -p flaky-venue
+        -p echo-venue -p echo-client -p echo-keeper -p flaky-venue -p logging-venue
 
 # Run the test suite.
 test:
@@ -41,7 +41,7 @@ ci:
     cargo clippy --workspace --all-targets --all-features -- -D warnings
     cargo doc --workspace --no-deps
     cargo build --release --target wasm32-wasip2 \
-        -p echo-venue -p echo-client -p echo-keeper -p flaky-venue
+        -p echo-venue -p echo-client -p echo-keeper -p flaky-venue -p logging-venue
     # nextest for the suite (as CI does); doctests run separately since nextest
     # does not cover them.
     cargo nextest run --workspace --all-features --no-fail-fast

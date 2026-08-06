@@ -14,6 +14,7 @@ The videre venue platform for the [nexum runtime](https://github.com/nullislabs/
 | `crates/no-std-probe` | Compile-only `#![no_std]` probe for the `IntentBody` derive. |
 | `modules/examples/` | The echo-venue reference adapter and its paired echo-client / echo-keeper modules. |
 | `modules/fixtures/flaky-venue` | Evil-by-design adapter fixture for supervisor recovery tests. |
+| `modules/fixtures/logging-venue` | Adapter fixture declaring the `logging` capability, for the venue logging tests. |
 | `wit/` | The `videre:venue`, `videre:types`, and `videre:value-flow` WIT packages, plus vendored cross-repo deps under `wit/deps/`. |
 | `extensions.toml` | Client-capability registry: the per-namespace rows the module world synthesis emits beyond the core `nexum:host` table. |
 

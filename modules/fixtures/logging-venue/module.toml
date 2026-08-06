@@ -1,0 +1,19 @@
+# logging-venue adapter manifest - the logging-capability test fixture.
+# Declares logging alone, so the per-component world the macro derives
+# imports nexum:host/logging and nothing else, and the runtime holds the
+# component's import to this declaration at boot.
+
+[module]
+name = "logging-venue"
+version = "0.1.0"
+kind = "venue-adapter"
+
+[capabilities]
+required = ["logging"]
+optional = []
+
+[capabilities.http]
+allow = []
+
+[config]
+name = "logging-venue"
