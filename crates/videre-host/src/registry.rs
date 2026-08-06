@@ -40,21 +40,23 @@ use crate::bindings::{
 };
 
 /// Venue identifier an adapter registers under. Opaque beyond equality
-/// and never empty or whitespace-only: the field is private, so
+/// and never empty or whitespace-padded: the field is private, so
 /// [`VenueId::new`] is the only constructor.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, derive_more::AsRef, derive_more::Display)]
 pub struct VenueId(#[as_ref(str)] String);
 
 /// A candidate venue id failed validation at a boundary.
 #[derive(Debug, thiserror::Error)]
-#[error("venue id must not be empty or whitespace-only (got {0:?})")]
+#[error("venue id must not be empty or whitespace-padded (got {0:?})")]
 pub struct InvalidVenueId(String);
 
 impl VenueId {
-    /// Validating constructor: rejects empty or whitespace-only input.
+    /// Validating constructor: rejects empty input and surrounding
+    /// whitespace. Padded ids are rejected, never trimmed: a trim would
+    /// collapse two spellings into one id.
     pub fn new(id: impl Into<String>) -> Result<Self, InvalidVenueId> {
         let id = id.into();
-        if id.trim().is_empty() {
+        if id.is_empty() || id.trim().len() != id.len() {
             return Err(InvalidVenueId(id));
         }
         Ok(Self(id))
@@ -809,9 +811,10 @@ impl<T: RuntimeTypes> ProviderKind<T> for VenueAdapterKind {
             fuel_per_call,
             liveness,
         } = instance;
-        // The venue id is the adapter's namespace: its manifest name, which
-        // manifest parse already refuses blank. Re-checked here before
-        // instantiating, so no unvalidated id ever runs a guest.
+        // The venue id is the adapter's namespace: its manifest name.
+        // Manifest parse refuses a blank name but not a padded one, so
+        // this is the check that catches it, before instantiating: no
+        // unvalidated id ever runs a guest.
         let venue_id = store
             .data()
             .run
@@ -1883,6 +1886,18 @@ mod tests {
         assert_eq!(VenueId::new("cow").expect("constructs").to_string(), "cow");
         // The derived accessor is `AsRef<str>`, matching the SDK id.
         assert_eq!(AsRef::<str>::as_ref(&cow()), "cow");
+    }
+
+    #[test]
+    fn padded_venue_id_is_rejected_at_construction() {
+        assert!("demo ".parse::<VenueId>().is_err());
+        assert!(" demo".parse::<VenueId>().is_err());
+        assert!(VenueId::new("demo\n").is_err());
+        assert!(VenueId::new("\tdemo").is_err());
+        assert!(VenueId::new("demo\u{a0}").is_err());
+        // Interior whitespace is not surrounding: reject-not-trim keeps
+        // the spelling exact and never rewrites it.
+        assert!(VenueId::new("demo venue").is_ok());
     }
 
     #[test]

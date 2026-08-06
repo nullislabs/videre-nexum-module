@@ -59,11 +59,11 @@ impl<S, P> Keeper<S, P> {
     /// Bind a source to the venue id its submissions route to. The
     /// reconcile budget defaults to [`DEFAULT_RECONCILE_BUDGET`], and
     /// denial classification to the coarse every-denial-drops mapping.
-    pub fn new(source: S, venues: P, venue: impl Into<VenueId>) -> Self {
+    pub fn new(source: S, venues: P, venue: VenueId) -> Self {
         Self {
             source,
             venues,
-            venue: venue.into(),
+            venue,
             max_per_tick: DEFAULT_RECONCILE_BUDGET,
             classify: DROP_DENIED,
         }
@@ -503,7 +503,7 @@ mod tests {
     }
 
     fn keeper(outcome: Outcome, venue: &StubVenue) -> Keeper<StubSource, &StubVenue> {
-        Keeper::new(StubSource(outcome), venue, "stub")
+        Keeper::new(StubSource(outcome), venue, VenueId::from_static("stub"))
     }
 
     #[test]
@@ -579,7 +579,7 @@ mod tests {
             Outcome::Submit(b"two".to_vec()),
             Outcome::Submit(b"one".to_vec()),
         ]));
-        let keeper = Keeper::new(source, &venue, "stub");
+        let keeper = Keeper::new(source, &venue, VenueId::from_static("stub"));
 
         assert_eq!(
             run(keeper.run(&host, &TICK))
@@ -884,7 +884,11 @@ mod tests {
     /// A keeper whose source never submits: exercises the reconcile pass
     /// alone.
     fn idle_keeper(venue: &CountingVenue) -> Keeper<StubSource, &CountingVenue> {
-        Keeper::new(StubSource(Outcome::WaitBlock), venue, STUB)
+        Keeper::new(
+            StubSource(Outcome::WaitBlock),
+            venue,
+            VenueId::from_static(STUB),
+        )
     }
 
     fn mark(host: &impl nexum_sdk::host::LocalStoreHost, body: &[u8]) -> Option<Mark> {
@@ -898,7 +902,11 @@ mod tests {
         let host = MockLocalStore::default();
         put_watch(&host);
         let venue = CountingVenue::accepting();
-        let keeper = Keeper::new(StubSource(Outcome::Submit(b"body".to_vec())), &venue, STUB);
+        let keeper = Keeper::new(
+            StubSource(Outcome::Submit(b"body".to_vec())),
+            &venue,
+            VenueId::from_static(STUB),
+        );
 
         // Tick A: None -> reserve -> Accepted -> commit.
         let report = run(keeper.run(&host, &TICK)).expect("keeper runs");
@@ -934,7 +942,11 @@ mod tests {
             .put(&Address::ZERO, &B256::ZERO, b"params")
             .expect("watch writes");
         let venue = CountingVenue::accepting();
-        let keeper = Keeper::new(StubSource(Outcome::Submit(b"order".to_vec())), &venue, STUB);
+        let keeper = Keeper::new(
+            StubSource(Outcome::Submit(b"order".to_vec())),
+            &venue,
+            VenueId::from_static(STUB),
+        );
 
         // Tick A: venue accepts (POST #1) but the commit write faults; the
         // RESERVED marker persists, no release runs.
@@ -1067,8 +1079,12 @@ mod tests {
         }
         put_watch(&host);
         let venue = CountingVenue::accepting();
-        let keeper = Keeper::new(StubSource(Outcome::Submit(b"fresh".to_vec())), &venue, STUB)
-            .with_reconcile_budget(2);
+        let keeper = Keeper::new(
+            StubSource(Outcome::Submit(b"fresh".to_vec())),
+            &venue,
+            VenueId::from_static(STUB),
+        )
+        .with_reconcile_budget(2);
 
         // At most two orphans reconciled, yet the fresh watch still
         // submits its own order this tick.
@@ -1105,7 +1121,11 @@ mod tests {
             .put(&Address::ZERO, &B256::ZERO, b"params")
             .expect("watch writes");
         let venue = CountingVenue::accepting();
-        let keeper = Keeper::new(StubSource(Outcome::Submit(b"order".to_vec())), &venue, STUB);
+        let keeper = Keeper::new(
+            StubSource(Outcome::Submit(b"order".to_vec())),
+            &venue,
+            VenueId::from_static(STUB),
+        );
 
         // The faulted commit is a proxy for a crash between submit and
         // commit: the marker MUST be RESERVED, never released to None.
@@ -1134,7 +1154,11 @@ mod tests {
         WatchSet::new(&host)
             .put(&Address::ZERO, &B256::ZERO, b"params")
             .expect("watch writes");
-        let keeper = Keeper::new(StubSource(Outcome::Submit(b"order".to_vec())), venue, STUB);
+        let keeper = Keeper::new(
+            StubSource(Outcome::Submit(b"order".to_vec())),
+            venue,
+            VenueId::from_static(STUB),
+        );
         (host, keeper)
     }
 
@@ -1476,7 +1500,7 @@ mod tests {
         let sweep = Keeper::new(
             StubSource(Outcome::Submit(b"body".to_vec())),
             &venue,
-            "stub",
+            VenueId::from_static("stub"),
         )
         .with_classifier(GraceVenue::classify_denied);
         let report = run(sweep.run(&host, &TICK)).expect("keeper runs");
@@ -1516,8 +1540,12 @@ mod tests {
         // watch and its reservation both point at the same body.
         seed_reserved(&host, b"body");
         let venue = CountingVenue::new(Err(VenueFault::Denied(GRACE_DENIAL.into())));
-        let sweep = Keeper::new(StubSource(Outcome::Submit(b"body".to_vec())), &venue, STUB)
-            .with_classifier(GraceVenue::classify_denied);
+        let sweep = Keeper::new(
+            StubSource(Outcome::Submit(b"body".to_vec())),
+            &venue,
+            VenueId::from_static(STUB),
+        )
+        .with_classifier(GraceVenue::classify_denied);
 
         // Ticks advance the block, so the grace can expire; without the
         // release the marker would pin the watch on the Reserved arm and

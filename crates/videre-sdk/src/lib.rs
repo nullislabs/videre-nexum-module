@@ -36,7 +36,8 @@ pub use nexum_sdk;
 pub use adapter::VenueAdapter;
 pub use body::{BodyError, IntentBody};
 pub use client::{
-    ClientError, HostVenues, Quoted, Venue, VenueClient, VenueId, VenueReconcile, VenueTransport,
+    ClientError, HostVenues, InvalidVenueId, Quoted, Venue, VenueClient, VenueId, VenueReconcile,
+    VenueTransport,
 };
 pub use faults::VenueFault;
 pub use keeper::{
