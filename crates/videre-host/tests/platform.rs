@@ -17,9 +17,7 @@ use nexum_runtime::host::component::ChainMethod;
 use nexum_runtime::host::extension::{EventSources, Extension, ExtensionEvent, ProviderManifest};
 use nexum_runtime::host::state::HostState;
 use nexum_runtime::manifest::{CapabilityRegistry, ExtensionSections, NamespaceCaps};
-use nexum_runtime::supervisor::{
-    BootEnv, ConfiguredChains, Supervisor, build_linker, build_provider_linker,
-};
+use nexum_runtime::supervisor::{BootEnv, Supervisor, build_linker, build_provider_linker};
 use nexum_runtime::test_utils::rpc::FakeNode;
 use nexum_runtime::test_utils::{
     MockStateStore, MockTypes, mock_components, mock_components_from, test_chain_configs,
@@ -271,35 +269,11 @@ venue = "cow"
     manifest
 }
 
-fn intent_status_manifest(dir: &Path) -> PathBuf {
-    let manifest = dir.join("module.toml");
-    std::fs::write(
-        &manifest,
-        r#"
-[module]
-name = "example"
-
-[capabilities]
-required = ["logging"]
-
-[[subscription]]
-kind  = "intent-status"
-venue = "cow"
-"#,
-    )
-    .expect("write manifest");
-    manifest
-}
-
-/// `BootEnv` over the test `[chains]` set, so a chain-1 subscription admits.
-fn test_boot_env(limits: &ModuleLimits) -> BootEnv<'_> {
-    BootEnv {
-        limits,
-        configured_chains: ConfiguredChains::from_config(&EngineConfig {
-            chains: test_chain_configs(),
-            ..EngineConfig::default()
-        }),
-        require_component_digest: false,
+/// The test `[chains]` set, so a chain-1 subscription admits.
+fn test_engine_config() -> EngineConfig {
+    EngineConfig {
+        chains: test_chain_configs(),
+        ..EngineConfig::default()
     }
 }
 
@@ -316,13 +290,13 @@ async fn boot_one(
         path: wasm.to_path_buf(),
         manifest: Some(manifest.to_path_buf()),
     };
-    let limits = ModuleLimits::default();
+    let config = test_engine_config();
     Supervisor::boot_single(
         engine,
         linker,
         &entry,
         components,
-        &test_boot_env(&limits),
+        &BootEnv::from_config(&config),
         extensions,
         None,
     )
@@ -330,8 +304,8 @@ async fn boot_one(
     .expect("boot_single")
 }
 
-/// Boot the example module against the given videre platform.
-async fn boot_example(videre: &Arc<Videre>, wasm: &Path, manifest: &Path) -> Supervisor<MockTypes> {
+/// Boot one module against the given videre platform on fresh mocks.
+async fn boot_module(videre: &Arc<Videre>, wasm: &Path, manifest: &Path) -> Supervisor<MockTypes> {
     let engine = make_wasmtime_engine();
     let extensions = videre_assembly(videre);
     let linker = make_linker(&engine, &extensions);
@@ -343,18 +317,18 @@ async fn boot_example(videre: &Arc<Videre>, wasm: &Path, manifest: &Path) -> Sup
 /// a transition outside its venue filter is not delivered.
 #[tokio::test]
 async fn e2e_intent_status_subscription_receives_polled_transitions() {
-    let Some(wasm) = module_wasm_or_skip("example") else {
+    let Some(wasm) = module_wasm_or_skip("echo-client") else {
         return;
     };
     let dir = tempfile::tempdir().expect("tempdir");
-    let manifest = intent_status_manifest(dir.path());
+    let manifest = echo_client_status_manifest(dir.path());
 
     let registry = scripted_registry(ScriptedAdapter::new([
         IntentStatus::Pending,
         IntentStatus::Fulfilled,
     ]));
     let videre = Arc::new(Videre::from_registry(registry.clone()));
-    let mut supervisor = boot_example(&videre, &wasm, &manifest).await;
+    let mut supervisor = boot_module(&videre, &wasm, &manifest).await;
     assert!(
         supervisor
             .subscription_plan()
