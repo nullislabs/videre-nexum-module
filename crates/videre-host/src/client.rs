@@ -29,13 +29,13 @@ fn venue_id(venue: String) -> Result<VenueId, VenueError> {
 impl<T: RuntimeTypes> Host for HostState<T> {
     async fn quote(&mut self, venue: String, body: Vec<u8>) -> Result<Quotation, VenueError> {
         registry(self)?
-            .quote(&self.run.module, &venue_id(venue)?, body)
+            .quote(self.run.module.as_str(), &venue_id(venue)?, body)
             .await
     }
 
     async fn submit(&mut self, venue: String, body: Vec<u8>) -> Result<SubmitOutcome, VenueError> {
         registry(self)?
-            .submit(&self.run.module, &venue_id(venue)?, body)
+            .submit(self.run.module.as_str(), &venue_id(venue)?, body)
             .await
     }
 

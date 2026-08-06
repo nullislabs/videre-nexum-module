@@ -626,6 +626,17 @@ impl VenueRegistry {
             .expect("adapter map poisoned")
             .len()
     }
+
+    /// Number of installed adapters whose shared liveness is alive.
+    pub fn alive_venue_count(&self) -> usize {
+        self.inner
+            .adapters
+            .lock()
+            .expect("adapter map poisoned")
+            .values()
+            .filter(|v| v.liveness.is_alive())
+            .count()
+    }
 }
 
 /// Provider kind that boots a `videre:venue/venue-adapter` component and
@@ -678,6 +689,7 @@ impl<T: RuntimeTypes> ProviderKind<T> for VenueAdapterKind {
             .data()
             .run
             .module
+            .as_str()
             .parse::<VenueId>()
             .context("adapter venue id")?;
         let bindings = VenueAdapter::instantiate_async(&mut store, component, linker)

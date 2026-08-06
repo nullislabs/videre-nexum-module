@@ -17,8 +17,13 @@ use nexum_runtime::host::component::ChainMethod;
 use nexum_runtime::host::extension::{EventSources, Extension, ExtensionEvent, ProviderManifest};
 use nexum_runtime::host::state::HostState;
 use nexum_runtime::manifest::{CapabilityRegistry, ExtensionSections, NamespaceCaps};
-use nexum_runtime::supervisor::{Supervisor, build_linker, build_provider_linker};
-use nexum_runtime::test_utils::{MockChainProvider, MockStateStore, MockTypes, mock_components};
+use nexum_runtime::supervisor::{
+    BootEnv, ConfiguredChains, Supervisor, build_linker, build_provider_linker,
+};
+use nexum_runtime::test_utils::rpc::FakeNode;
+use nexum_runtime::test_utils::{
+    MockStateStore, MockTypes, mock_components, mock_components_from, test_chain_configs,
+};
 use videre_host::bindings::{
     IntentHeader, IntentStatus, Quotation, Settlement, SubmitOutcome, VenueError, value_flow,
 };
@@ -286,25 +291,52 @@ venue = "cow"
     manifest
 }
 
+/// `BootEnv` over the test `[chains]` set, so a chain-1 subscription admits.
+fn test_boot_env(limits: &ModuleLimits) -> BootEnv<'_> {
+    BootEnv {
+        limits,
+        configured_chains: ConfiguredChains::from_config(&EngineConfig {
+            chains: test_chain_configs(),
+            ..EngineConfig::default()
+        }),
+        require_component_digest: false,
+    }
+}
+
+/// Boot one module from its wasm and manifest through `boot_single`.
+async fn boot_one(
+    engine: &wasmtime::Engine,
+    linker: &Linker<HostState<MockTypes>>,
+    wasm: &Path,
+    manifest: &Path,
+    components: &nexum_runtime::host::component::Components<MockTypes>,
+    extensions: &[Arc<dyn Extension<MockTypes>>],
+) -> Supervisor<MockTypes> {
+    let entry = ModuleEntry {
+        path: wasm.to_path_buf(),
+        manifest: Some(manifest.to_path_buf()),
+    };
+    let limits = ModuleLimits::default();
+    Supervisor::boot_single(
+        engine,
+        linker,
+        &entry,
+        components,
+        &test_boot_env(&limits),
+        extensions,
+        None,
+    )
+    .await
+    .expect("boot_single")
+}
+
 /// Boot the example module against the given videre platform.
 async fn boot_example(videre: &Arc<Videre>, wasm: &Path, manifest: &Path) -> Supervisor<MockTypes> {
     let engine = make_wasmtime_engine();
     let extensions = videre_assembly(videre);
     let linker = make_linker(&engine, &extensions);
     let components = mock_components();
-    let limits = ModuleLimits::default();
-    Supervisor::boot_single(
-        &engine,
-        &linker,
-        wasm,
-        Some(manifest),
-        &components,
-        &limits,
-        &extensions,
-        None,
-    )
-    .await
-    .expect("boot_single")
+    boot_one(&engine, &linker, wasm, manifest, &components, &extensions).await
 }
 
 /// A module subscribed to `intent-status` receives the polled transitions;
@@ -325,7 +357,8 @@ async fn e2e_intent_status_subscription_receives_polled_transitions() {
     let mut supervisor = boot_example(&videre, &wasm, &manifest).await;
     assert!(
         supervisor
-            .extension_subscription_kinds()
+            .subscription_plan()
+            .extension_kinds
             .contains(INTENT_STATUS)
     );
 
@@ -388,19 +421,8 @@ async fn e2e_intent_status_flows_through_the_event_loop() {
     let linker = make_linker(&engine, &extensions);
     let components = mock_components();
     let logs = components.logs.clone();
-    let limits = ModuleLimits::default();
-    let mut supervisor = Supervisor::boot_single(
-        &engine,
-        &linker,
-        &wasm,
-        Some(&manifest),
-        &components,
-        &limits,
-        &extensions,
-        None,
-    )
-    .await
-    .expect("boot_single");
+    let mut supervisor =
+        boot_one(&engine, &linker, &wasm, &manifest, &components, &extensions).await;
 
     registry
         .submit("test-caller", &venue("cow"), b"body".to_vec())
@@ -414,7 +436,7 @@ async fn e2e_intent_status_flows_through_the_event_loop() {
     let manager = TaskManager::new();
     let executor = manager.executor();
     let mut tasks = TaskSet::new();
-    let subscribed = supervisor.extension_subscription_kinds();
+    let subscribed = supervisor.subscription_plan().extension_kinds;
     let streams = {
         let mut sources = EventSources::new(
             &config,
@@ -502,9 +524,9 @@ async fn e2e_echo_module_registry_adapter_round_trip() {
     // The adapter reads eth_blockNumber on submit to justify its `chain`
     // grant; program the mock so that read succeeds. The response body is
     // discarded by the adapter, so any Ok value serves.
-    let chain = MockChainProvider::new();
+    let chain = FakeNode::new();
     chain.on_method(ChainMethod::EthBlockNumber, "\"0x1\"");
-    let components = nexum_runtime::test_utils::mock_components_from(chain, MockStateStore::new());
+    let components = mock_components_from(&chain, MockStateStore::new());
     let logs = components.logs.clone();
 
     let engine = make_wasmtime_engine();
@@ -519,6 +541,7 @@ async fn e2e_echo_module_registry_adapter_round_trip() {
             path: module_wasm,
             manifest: Some(workspace_path("modules/examples/echo-client/module.toml")),
         }],
+        chains: test_chain_configs(),
         ..Default::default()
     };
     let videre = Arc::new(platform(&config));
@@ -530,14 +553,15 @@ async fn e2e_echo_module_registry_adapter_round_trip() {
             .await
             .expect("boot");
     assert_eq!(
-        supervisor.adapter_alive_count(),
+        registry_of(&supervisor).alive_venue_count(),
         1,
         "echo-venue is routable"
     );
     assert_eq!(supervisor.alive_count(), 1, "echo-client is alive");
     assert!(
         supervisor
-            .extension_subscription_kinds()
+            .subscription_plan()
+            .extension_kinds
             .contains(INTENT_STATUS)
     );
 
@@ -610,9 +634,9 @@ async fn e2e_keeper_module_drives_the_venue_through_the_typed_client() {
         return;
     };
 
-    let chain = MockChainProvider::new();
+    let chain = FakeNode::new();
     chain.on_method(ChainMethod::EthBlockNumber, "\"0x1\"");
-    let components = nexum_runtime::test_utils::mock_components_from(chain, MockStateStore::new());
+    let components = mock_components_from(&chain, MockStateStore::new());
     let logs = components.logs.clone();
 
     let engine = make_wasmtime_engine();
@@ -627,6 +651,7 @@ async fn e2e_keeper_module_drives_the_venue_through_the_typed_client() {
             path: module_wasm,
             manifest: Some(workspace_path("modules/examples/echo-keeper/module.toml")),
         }],
+        chains: test_chain_configs(),
         ..Default::default()
     };
     let videre = Arc::new(platform(&config));
@@ -638,7 +663,7 @@ async fn e2e_keeper_module_drives_the_venue_through_the_typed_client() {
             .await
             .expect("boot");
     assert_eq!(
-        supervisor.adapter_alive_count(),
+        registry_of(&supervisor).alive_venue_count(),
         1,
         "echo-venue is routable"
     );
@@ -806,8 +831,8 @@ body_versions = [1, 2]
     assert!(chain.contains("declares {1, 2}"), "{chain}");
 }
 
-/// An adapter whose manifest name is whitespace-only fails install at the
-/// venue-id boundary instead of registering a blank venue id.
+/// An adapter whose manifest name is whitespace-only is refused before it
+/// can register a blank venue id; the runtime rejects it at manifest parse.
 #[tokio::test]
 async fn e2e_blank_manifest_name_refuses_the_adapter_at_boot() {
     let Some(adapter_wasm) = module_wasm_or_skip("echo-venue") else {
@@ -854,7 +879,7 @@ body_versions = [1]
     };
     let chain = format!("{err:#}");
     assert!(
-        chain.contains("venue id must not be empty or whitespace-only"),
+        chain.contains("[module].name is missing or blank"),
         "{chain}"
     );
 }
@@ -866,11 +891,10 @@ body_versions = [1]
 async fn boot_flaky_venue(
     adapter_wasm: PathBuf,
     limits: ModuleLimits,
-) -> (Supervisor<MockTypes>, MockChainProvider) {
-    let chain = MockChainProvider::new();
+) -> (Supervisor<MockTypes>, FakeNode) {
+    let chain = FakeNode::new();
     chain.on_method(ChainMethod::EthBlockNumber, "\"0xdead\"");
-    let components =
-        nexum_runtime::test_utils::mock_components_from(chain.clone(), MockStateStore::new());
+    let components = mock_components_from(&chain, MockStateStore::new());
     let engine = make_wasmtime_engine();
     let config = EngineConfig {
         adapters: vec![AdapterEntry {
@@ -901,8 +925,8 @@ async fn e2e_trapped_adapter_is_swept_and_restarts() {
     };
     let (mut supervisor, chain) = boot_flaky_venue(wasm, ModuleLimits::default()).await;
     assert_eq!(supervisor.adapter_count(), 1);
-    assert_eq!(supervisor.adapter_alive_count(), 1, "boots alive");
     let registry = registry_of(&supervisor);
+    assert_eq!(registry.alive_venue_count(), 1, "boots alive");
     let flaky = venue("flaky-venue");
 
     // The poison head detonates submit: the guest panic traps the store
@@ -912,11 +936,7 @@ async fn e2e_trapped_adapter_is_swept_and_restarts() {
         .await
         .expect_err("the poison head traps the adapter");
     assert!(matches!(err, VenueError::Unavailable(_)), "{err:?}");
-    assert_eq!(
-        supervisor.adapter_alive_count(),
-        0,
-        "the trap drops liveness"
-    );
+    assert_eq!(registry.alive_venue_count(), 0, "the trap drops liveness");
 
     // Temporarily dead resolves distinctly from never installed.
     assert!(matches!(
@@ -935,7 +955,7 @@ async fn e2e_trapped_adapter_is_swept_and_restarts() {
     chain.on_method(ChainMethod::EthBlockNumber, "\"0x1\"");
     tokio::time::sleep(Duration::from_millis(1_200)).await;
     supervisor.dispatch_block(block(1)).await;
-    assert_eq!(supervisor.adapter_alive_count(), 1, "the sweep revived it");
+    assert_eq!(registry.alive_venue_count(), 1, "the sweep revived it");
     let outcome = registry
         .submit("mod-a", &flaky, b"body".to_vec())
         .await
@@ -967,22 +987,18 @@ async fn e2e_crash_looping_adapter_is_poisoned() {
     let _ = registry.submit("mod-a", &flaky, b"body".to_vec()).await;
     tokio::time::sleep(Duration::from_millis(1_200)).await;
     supervisor.dispatch_block(block(1)).await;
-    assert_eq!(supervisor.adapter_alive_count(), 1, "first restart lands");
+    assert_eq!(registry.alive_venue_count(), 1, "first restart lands");
 
     // Trap 2 crosses the 2-failure threshold: the sweep quarantines the
     // adapter instead of scheduling another restart.
     let _ = registry.submit("mod-a", &flaky, b"body".to_vec()).await;
     supervisor.dispatch_block(block(1)).await;
-    assert_eq!(supervisor.adapter_alive_count(), 0, "quarantined");
+    assert_eq!(registry.alive_venue_count(), 0, "quarantined");
 
     // Past every backoff the poisoned adapter stays dead and unavailable.
     tokio::time::sleep(Duration::from_millis(1_500)).await;
     supervisor.dispatch_block(block(1)).await;
-    assert_eq!(
-        supervisor.adapter_alive_count(),
-        0,
-        "no restart while poisoned"
-    );
+    assert_eq!(registry.alive_venue_count(), 0, "no restart while poisoned");
     assert!(matches!(
         registry.submit("mod-a", &flaky, b"body".to_vec()).await,
         Err(VenueError::Unavailable(_))
@@ -1064,20 +1080,9 @@ chain_id = 1
     let linker = make_linker(&engine, &extensions);
     let components = mock_components();
     let logs = components.logs.clone();
-    let limits = ModuleLimits::default();
 
-    let mut supervisor = Supervisor::boot_single(
-        &engine,
-        &linker,
-        &wasm,
-        Some(&manifest),
-        &components,
-        &limits,
-        &extensions,
-        None,
-    )
-    .await
-    .expect("boot_single");
+    let mut supervisor =
+        boot_one(&engine, &linker, &wasm, &manifest, &components, &extensions).await;
 
     // The precondition of the client.rs unknown-venue branch: the booted
     // service map holds no venue registry.
