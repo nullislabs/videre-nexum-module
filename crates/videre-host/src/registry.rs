@@ -1366,6 +1366,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_long_expired_quote_still_refuses_its_owner() {
+        let calls = Arc::new(StubCalls::default());
+        let clock = Arc::new(TestClock::default());
+        clock.set(QUOTE_VALID_UNTIL_MS - 1);
+        let registry = registry_at(clock.clone(), StubAdapter::new(calls.clone()));
+
+        registry
+            .quote("mod-a", &cow(), b"body".to_vec())
+            .await
+            .expect("quote succeeds");
+        // Far past the grace, so the entry is sweepable: the check reads
+        // before it sweeps, so the owner is still refused at any age.
+        clock.set(QUOTE_VALID_UNTIL_MS + QUOTE_GRACE_MS * 1_000);
+
+        let err = registry
+            .submit("mod-a", &cow(), b"body".to_vec())
+            .await
+            .expect_err("a long-expired quote is still its owner's refusal");
+        assert!(matches!(err, VenueError::Denied(r) if r.starts_with("stale-quote: ")));
+        assert_eq!(calls.submit.load(Ordering::SeqCst), 0);
+        assert_eq!(quote_ledger_len(&registry), 0);
+    }
+
+    #[tokio::test]
     async fn an_over_quota_submit_never_reaches_the_quote_ledger() {
         let calls = Arc::new(StubCalls::default());
         let clock = Arc::new(TestClock::default());
