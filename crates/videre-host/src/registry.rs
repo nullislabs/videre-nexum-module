@@ -106,10 +106,10 @@ type QuoteKey = (String, VenueId, B256);
 /// (both in-tree adapters quote it).
 const QUOTE_HORIZON_MS: u64 = 3_600_000;
 
-/// Cap on live ledger entries, mirroring the watch set's. At the cap a
-/// quote records nothing rather than evicting a live entry, so a
-/// flooding caller leaves its own submits unchecked instead of
-/// disarming another caller's.
+/// Cap on live ledger entries, mirroring the watch set's default. At the
+/// cap a quote records nothing rather than evicting a live entry, so no
+/// recorded quote is disarmed by another caller's flood; a full ledger
+/// does leave every caller's later quotes unrecorded until it drains.
 const MAX_QUOTE_ENTRIES: usize = 1024;
 
 /// How long an expired entry survives the sweep. Any ledger touch

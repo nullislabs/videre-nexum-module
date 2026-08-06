@@ -84,11 +84,13 @@ pub mod sealed {
 /// over any transport dispatches statically. Sealed: a transport opts
 /// in by also implementing the sealing marker.
 pub trait VenueTransport: sealed::SealedTransport {
-    /// Price an opaque intent body at the named venue. The host records
-    /// the quote and refuses a later submit of the same bytes once the
+    /// Price an opaque intent body at the named venue. Staleness
+    /// enforcement is host-side, not the adapter's: the host records the
+    /// quote and refuses a later submit of the same bytes once the
     /// quotation's `valid-until-ms` elapses (`denied` with the
-    /// `stale-quote:` prefix); staleness enforcement is host-side, not
-    /// the adapter's responsibility.
+    /// `stale-quote:` prefix). Best-effort, never a guarantee: a
+    /// quotation valid far past the host's recording horizon is not
+    /// recorded, nor is one quoted while the host's ledger is full.
     fn quote(
         &self,
         venue: &VenueId,
@@ -317,7 +319,8 @@ impl<V: Venue, T: VenueTransport> Quoted<'_, V, T> {
 
     /// Submit the quoted body to the venue that priced it. The host
     /// refuses the bytes once the quotation's `valid-until-ms` has
-    /// elapsed; re-quote to re-arm.
+    /// elapsed, best-effort as [`VenueTransport::quote`] describes;
+    /// re-quote to re-arm.
     pub async fn submit(self) -> Result<SubmitOutcome, ClientError> {
         Ok(self.client.transport.submit(&V::ID, self.bytes).await?)
     }
