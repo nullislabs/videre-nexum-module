@@ -11,7 +11,9 @@
 //!   published vectors; the reject vectors fail a decoder that
 //!   tolerates a non-minimal encoding.
 //! - [`MockTransport`]: the chain, messaging, and outbound-HTTP
-//!   transports as programmable in-memory mocks behind the SDK seams.
+//!   transports as programmable in-memory mocks behind the SDK seams,
+//!   plus [`MockSigner`], the host's signing role for a
+//!   `requires-signing` submit outcome.
 //!
 //! ```rust
 //! use videre_test::reference::{
@@ -34,6 +36,7 @@ pub mod header;
 pub mod reconcile;
 pub mod reference;
 pub mod report;
+pub mod signer;
 pub mod transport;
 pub mod uint;
 
@@ -45,6 +48,7 @@ pub use header::{
 };
 pub use reconcile::ReconcileFixture;
 pub use report::{ConformanceReport, Violation};
+pub use signer::{MockSigner, SignError};
 pub use transport::{
     ChainCall, Message, MessagingHost, MockChain, MockFetch, MockMessaging, MockTransport,
     PublishRecord, RecordedRequest,

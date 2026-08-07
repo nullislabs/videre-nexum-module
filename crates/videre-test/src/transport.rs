@@ -5,7 +5,8 @@
 //! [`MessagingHost`], [`Fetch`]). [`MockMessaging::scope_topics`] plays
 //! the `messaging_topics` grant and [`MockFetch::scope_hosts`] the
 //! `[capabilities.http].allow` list; both refuse off-grant calls as a
-//! typed `denied`, as the host would.
+//! typed `denied`, as the host would. [`MockSigner`] rides along as the
+//! host's signing role for a `requires-signing` submit outcome.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -14,6 +15,8 @@ use nexum_sdk::host::{ChainError, ChainHost, Fault};
 use nexum_sdk::http::{Fetch, FetchError, FetchOptions};
 pub use nexum_sdk_test::{ChainCall, MockChain, MockMessaging, PublishRecord};
 pub use videre_sdk::transport::{Message, MessagingHost};
+
+use crate::signer::MockSigner;
 
 /// Composed in-memory transport; each field is the per-seam mock.
 #[derive(Default)]
@@ -24,6 +27,8 @@ pub struct MockTransport {
     pub messaging: MockMessaging,
     /// Outbound wasi:http mock.
     pub http: MockFetch,
+    /// The host's signing role for `requires-signing` outcomes.
+    pub signer: MockSigner,
 }
 
 impl MockTransport {

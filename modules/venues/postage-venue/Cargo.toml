@@ -1,0 +1,30 @@
+[package]
+name = "postage-venue"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Swarm postage venue adapter: derives a BZZ-for-storage header from a batch-purchase body and answers submit with requires-signing over the createBatch transaction."
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# ABI encoding for the createBatch calldata the unsigned tx carries; the
+# address and uint types ride videre-sdk's nexum-sdk prelude re-export.
+alloy-sol-types = { version = "1.6", default-features = false, features = ["std"] }
+# Body payload structs derive the borsh traits behind `IntentBody`.
+borsh = { version = "1", features = ["derive"] }
+# Event macros only; the facade dispatches through tracing-core, so the
+# host-oriented default features stay off, as in the module-world guests.
+tracing = { version = "0.1", default-features = false }
+videre-sdk = { path = "../../../crates/videre-sdk" }
+wit-bindgen = { version = "0.59", default-features = false, features = ["macros", "realloc"] }
+
+[dev-dependencies]
+# The conformance kit: the published header goldens and codec vectors,
+# plus the signer mock the pre-sign proof drives.
+videre-test = { path = "../../../crates/videre-test" }

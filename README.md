@@ -15,6 +15,7 @@ The videre venue platform for the [nexum runtime](https://github.com/nullislabs/
 | `modules/examples/` | The echo-venue reference adapter and its paired echo-client / echo-keeper modules. |
 | `modules/fixtures/flaky-venue` | Evil-by-design adapter fixture for supervisor recovery tests. |
 | `modules/fixtures/logging-venue` | Adapter fixture declaring the `logging` capability, for the venue logging tests. |
+| `modules/venues/postage-venue` | Swarm postage venue adapter: BZZ-for-storage header, `requires-signing` over the `createBatch` purchase. |
 | `wit/` | The `videre:venue`, `videre:types`, and `videre:value-flow` WIT packages, plus vendored cross-repo deps under `wit/deps/`. |
 | `extensions.toml` | Client-capability registry: the per-namespace rows the module world synthesis emits beyond the core `nexum:host` table. |
 | `docs/` | Architecture decision records under `docs/adr/`; design documents and runbooks under `docs/design/`. |

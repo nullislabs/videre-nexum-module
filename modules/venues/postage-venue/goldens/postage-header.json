@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "venue": "postage-venue",
+  "goldens": [
+    {
+      "name": "first-batch",
+      "body": "000102030405060708090a0b0c0d0e0f1011121314e80300000000000011100102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2000",
+      "header": {
+        "gives": {
+          "asset": {
+            "erc20": {
+              "token": "dbf3ea6f5bee45c02255b2c26a16f300502f68da"
+            }
+          },
+          "amount": "07d00000"
+        },
+        "wants": {
+          "asset": {
+            "service": {
+              "description": "swarm postage batch: chunk capacity"
+            }
+          },
+          "amount": "020000"
+        },
+        "settlement": {
+          "chain": 100
+        },
+        "authorisation": "eip712"
+      },
+      "notes": "gives the bzz erc20 total (per-chunk balance shifted left by depth), wants the display-grade chunk capacity"
+    },
+    {
+      "name": "deep-immutable-batch",
+      "body": "00aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa01000000000000001810ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff01",
+      "header": {
+        "gives": {
+          "asset": {
+            "erc20": {
+              "token": "dbf3ea6f5bee45c02255b2c26a16f300502f68da"
+            }
+          },
+          "amount": "01000000"
+        },
+        "wants": {
+          "asset": {
+            "service": {
+              "description": "swarm postage batch: chunk capacity"
+            }
+          },
+          "amount": "01000000"
+        },
+        "settlement": {
+          "chain": 100
+        },
+        "authorisation": "eip712"
+      },
+      "notes": "immutability rides only the calldata; the value-flow legs are unchanged"
+    }
+  ]
+}
