@@ -97,6 +97,11 @@ pub enum GoldenAsset {
         #[serde(with = "hex_bytes")]
         token: Vec<u8>,
     },
+    /// A venue-provided service; display-grade, never host-verified.
+    Service {
+        /// Venue-scoped human-readable description of the service.
+        description: String,
+    },
 }
 
 /// Serde mirror of the wire `auth-scheme`.
@@ -142,6 +147,9 @@ impl From<Asset> for GoldenAsset {
         match asset {
             Asset::Native => GoldenAsset::Native,
             Asset::Erc20(erc20) => GoldenAsset::Erc20 { token: erc20.token },
+            Asset::Service(service) => GoldenAsset::Service {
+                description: service.description,
+            },
         }
     }
 }
@@ -287,18 +295,37 @@ mod tests {
         }
     }
 
+    fn service_header() -> IntentHeader {
+        IntentHeader {
+            wants: AssetAmount {
+                asset: Asset::Service(videre_sdk::value_flow::ServiceDesc {
+                    description: "postage batch".to_owned(),
+                }),
+                amount: vec![0x02],
+            },
+            ..wire_header()
+        }
+    }
+
     #[test]
     fn golden_mirror_covers_every_wire_case_and_round_trips_as_json() {
-        let golden: GoldenHeader = wire_header().into();
         let goldens = HeaderGoldens {
             version: FormatVersion,
             venue: "acme".to_owned(),
-            goldens: vec![HeaderGolden {
-                name: "kitchen-sink".to_owned(),
-                body: vec![0],
-                header: golden,
-                notes: None,
-            }],
+            goldens: vec![
+                HeaderGolden {
+                    name: "kitchen-sink".to_owned(),
+                    body: vec![0],
+                    header: wire_header().into(),
+                    notes: None,
+                },
+                HeaderGolden {
+                    name: "service-want".to_owned(),
+                    body: vec![1],
+                    header: service_header().into(),
+                    notes: None,
+                },
+            ],
         };
         let json = goldens.to_json();
         assert_eq!(HeaderGoldens::from_json(&json).unwrap(), goldens);
@@ -307,6 +334,8 @@ mod tests {
         assert!(json.contains("\"native\""));
         assert!(json.contains("\"erc20\""));
         assert!(json.contains("\"token\""));
+        assert!(json.contains("\"service\""));
+        assert!(json.contains("\"description\": \"postage batch\""));
         assert!(json.contains("\"chain\""));
         assert!(json.contains("\"eip1271\""));
     }

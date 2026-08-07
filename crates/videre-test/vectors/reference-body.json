@@ -33,6 +33,12 @@
       "notes": "option absent is a bare 0x00, bool false is 0x00"
     },
     {
+      "name": "v3-service",
+      "bytes": "022a000000000000000d000000706f73746167652062617463680200000000000000",
+      "expect": "round-trip",
+      "notes": "tag 0x02; a service want is display-grade, the codec is plain borsh"
+    },
+    {
       "name": "empty-body",
       "bytes": "",
       "expect": "empty",

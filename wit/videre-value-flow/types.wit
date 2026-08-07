@@ -16,11 +16,22 @@ interface types {
         token: address,
     }
 
-    /// A kind of value that can move. erc721/erc1155/service/offchain are 0.2+.
+    /// A venue-provided service, not a chain asset. Display-grade by
+    /// construction: policy has teeth on enforceable legs only, and a
+    /// service leg is never host-verified.
+    record service-desc {
+        /// Venue-scoped human-readable description of the service.
+        description: string,
+    }
+
+    /// A kind of value that can move. erc721/erc1155/offchain are 0.2+.
     variant asset {
         /// The settlement chain's gas token.
         native,
         erc20(erc20),
+        /// A venue-provided service; the paired amount counts
+        /// venue-defined units.
+        service(service-desc),
     }
 
     /// An amount of one asset. Never negative; direction lives in the field

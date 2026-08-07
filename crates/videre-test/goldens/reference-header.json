@@ -43,6 +43,29 @@
         "authorisation": "eip712"
       },
       "notes": "v2 adds an erc20 want at the recipient token address"
+    },
+    {
+      "name": "v3-service",
+      "body": "022a000000000000000d000000706f73746167652062617463680200000000000000",
+      "header": {
+        "gives": {
+          "asset": "native",
+          "amount": "2a"
+        },
+        "wants": {
+          "asset": {
+            "service": {
+              "description": "postage batch"
+            }
+          },
+          "amount": "02"
+        },
+        "settlement": {
+          "chain": 1
+        },
+        "authorisation": "eip712"
+      },
+      "notes": "v3 wants a display-grade service leg in venue-defined units"
     }
   ]
 }

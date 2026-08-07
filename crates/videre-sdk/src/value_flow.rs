@@ -52,6 +52,19 @@ impl AssetAmount {
             amount: encode_uint(amount),
         }
     }
+
+    /// A service leg counting `units` of a venue-defined service, with the
+    /// count in the canonical `uint` encoding. Display-grade by
+    /// construction: never host-verified.
+    #[must_use]
+    pub fn service(description: impl Into<String>, units: U256) -> Self {
+        Self {
+            asset: Asset::Service(ServiceDesc {
+                description: description.into(),
+            }),
+            amount: encode_uint(units),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -77,6 +90,20 @@ mod tests {
     fn decode_rejects_a_leading_zero_byte() {
         assert_eq!(decode_uint(&[0x00]), Err(UintError::LeadingZero));
         assert_eq!(decode_uint(&[0x00, 0x01]), Err(UintError::LeadingZero));
+    }
+
+    #[test]
+    fn service_constructor_builds_a_canonical_service_leg() {
+        let leg = AssetAmount::service("postage batch", U256::from(256u64));
+        let Asset::Service(desc) = &leg.asset else {
+            panic!("expected a service asset, got {:?}", leg.asset);
+        };
+        assert_eq!(desc.description, "postage batch");
+        assert_eq!(leg.amount, vec![0x01, 0x00]);
+        assert_eq!(
+            AssetAmount::service("gratis", U256::ZERO).amount,
+            Vec::<u8>::new(),
+        );
     }
 
     #[test]
