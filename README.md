@@ -17,6 +17,7 @@ The videre venue platform for the [nexum runtime](https://github.com/nullislabs/
 | `modules/fixtures/logging-venue` | Adapter fixture declaring the `logging` capability, for the venue logging tests. |
 | `wit/` | The `videre:venue`, `videre:types`, and `videre:value-flow` WIT packages, plus vendored cross-repo deps under `wit/deps/`. |
 | `extensions.toml` | Client-capability registry: the per-namespace rows the module world synthesis emits beyond the core `nexum:host` table. |
+| `docs/` | Architecture decision records under `docs/adr/`; design documents and runbooks under `docs/design/`. |
 
 ## Development
 

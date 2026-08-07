@@ -48,7 +48,7 @@ interface types {
     }
 
     /// Lifecycle state. Coarse and portable; proof and failure reason ride the
-    /// opaque status body (docs/design/videre-wit-pinned-0.1.0.md).
+    /// opaque status body (docs/design/videre-wit-pinned-0.1.0.md §4).
     enum intent-status {
         pending,
         open,
