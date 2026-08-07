@@ -1,6 +1,23 @@
-//! Shared path fixtures for the videre-host integration tests.
+//! Shared fixtures for the videre-host integration tests: workspace paths,
+//! the hardened wasm lookup, and the platform boot assembly.
+//!
+//! Every `tests/*.rs` binary compiles this module afresh and uses a subset,
+//! so the unused-item lint is silenced here. The wasm lookup's own unit
+//! tests live in `wasm_helper.rs`, one binary, so they do not multiply
+//! across the suites.
+#![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use nexum_runtime::bindings::nexum;
+use nexum_runtime::engine_config::{EngineConfig, ModuleEntry};
+use nexum_runtime::host::extension::{Extension, ExtensionEvent};
+use nexum_runtime::host::state::HostState;
+use nexum_runtime::supervisor::{BootEnv, Supervisor, build_linker};
+use nexum_runtime::test_utils::{MockTypes, test_chain_configs};
+use videre_host::{VenueId, VenueRegistry, Videre};
+use wasmtime::component::Linker;
 
 /// Path under the workspace root (the topmost ancestor with a `Cargo.toml`).
 pub fn workspace_path(relative: &str) -> PathBuf {
@@ -29,7 +46,10 @@ pub fn module_wasm_or_skip(module_name: &str) -> Option<PathBuf> {
     )
 }
 
-fn wasm_or_skip(module_name: &str, skip_requested: bool, ci: bool) -> Option<PathBuf> {
+/// The seam under [`module_wasm_or_skip`], env reads lifted out so
+/// `wasm_helper.rs` pins the skip/hard-fail policy without touching the
+/// process environment.
+pub fn wasm_or_skip(module_name: &str, skip_requested: bool, ci: bool) -> Option<PathBuf> {
     let artifact = module_name.replace('-', "_");
     let p = workspace_path(&format!("target/wasm32-wasip2/release/{artifact}.wasm"));
     if p.is_file() {
@@ -44,24 +64,97 @@ fn wasm_or_skip(module_name: &str, skip_requested: bool, ci: bool) -> Option<Pat
     None
 }
 
-#[cfg(test)]
-mod tests {
-    use super::wasm_or_skip;
+/// The subscription kind the platform's status poller emits.
+pub const INTENT_STATUS: &str = "intent-status";
 
-    #[test]
-    #[should_panic(expected = "run `just build-modules`")]
-    fn missing_wasm_hard_fails_by_default() {
-        wasm_or_skip("no-such-module", false, false);
-    }
+/// A test venue id, parsed through the validating boundary.
+pub fn venue(id: &str) -> VenueId {
+    id.parse().expect("valid venue id")
+}
 
-    #[test]
-    fn missing_wasm_skips_when_opted_in() {
-        assert!(wasm_or_skip("no-such-module", true, false).is_none());
-    }
+pub fn make_wasmtime_engine() -> wasmtime::Engine {
+    let mut config = wasmtime::Config::new();
+    config.wasm_component_model(true);
+    config.consume_fuel(true);
+    wasmtime::Engine::new(&config).expect("wasmtime engine")
+}
 
-    #[test]
-    #[should_panic(expected = "run `just build-modules`")]
-    fn ci_overrides_the_skip_opt_in() {
-        wasm_or_skip("no-such-module", true, true);
+/// The platform's extension slice, keeping the concrete handle for
+/// event-source calls.
+pub fn videre_assembly(videre: &Arc<Videre>) -> Vec<Arc<dyn Extension<MockTypes>>> {
+    vec![Arc::clone(videre) as Arc<dyn Extension<MockTypes>>]
+}
+
+pub fn make_linker(
+    engine: &wasmtime::Engine,
+    extensions: &[Arc<dyn Extension<MockTypes>>],
+) -> Linker<HostState<MockTypes>> {
+    build_linker::<MockTypes>(engine, extensions).expect("build_linker")
+}
+
+/// The registry the booted supervisor publishes.
+pub fn registry_of(supervisor: &Supervisor<MockTypes>) -> Arc<VenueRegistry> {
+    supervisor
+        .services()
+        .get::<VenueRegistry>(VenueRegistry::NAMESPACE)
+        .expect("registry service")
+}
+
+/// A test block that drives dispatch and the dispatch-time sweeps.
+pub fn block(chain_id: u64) -> nexum::host::types::Block {
+    nexum::host::types::Block {
+        chain_id,
+        number: 19_000_000,
+        hash: vec![0xab; 32],
+        timestamp: 1_700_000_000_000,
     }
+}
+
+/// Wrap a polled transition as the extension event the platform emits.
+pub fn status_event(update: videre_host::IntentStatusUpdate) -> ExtensionEvent {
+    let attrs = vec![("venue", update.venue.clone())];
+    let payload = update.encode().expect("encode intent-status envelope");
+    ExtensionEvent {
+        kind: INTENT_STATUS,
+        attrs,
+        event: nexum::host::types::Event::Custom(nexum::host::types::CustomEvent {
+            kind: INTENT_STATUS.to_owned(),
+            payload,
+        }),
+    }
+}
+
+/// The test `[chains]` set, so a chain-1 subscription admits.
+fn test_engine_config() -> EngineConfig {
+    EngineConfig {
+        chains: test_chain_configs(),
+        ..EngineConfig::default()
+    }
+}
+
+/// Boot one module from its wasm and manifest through `boot_single`.
+pub async fn boot_one(
+    engine: &wasmtime::Engine,
+    linker: &Linker<HostState<MockTypes>>,
+    wasm: &Path,
+    manifest: &Path,
+    components: &nexum_runtime::host::component::Components<MockTypes>,
+    extensions: &[Arc<dyn Extension<MockTypes>>],
+) -> Supervisor<MockTypes> {
+    let entry = ModuleEntry {
+        path: wasm.to_path_buf(),
+        manifest: Some(manifest.to_path_buf()),
+    };
+    let config = test_engine_config();
+    Supervisor::boot_single(
+        engine,
+        linker,
+        &entry,
+        components,
+        &BootEnv::from_config(&config),
+        extensions,
+        None,
+    )
+    .await
+    .expect("boot_single")
 }
