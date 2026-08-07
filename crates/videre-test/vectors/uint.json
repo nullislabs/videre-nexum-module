@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "vectors": [
+    {
+      "name": "zero",
+      "bytes": "",
+      "expect": {
+        "value": "0"
+      },
+      "notes": "zero is the empty list"
+    },
+    {
+      "name": "one",
+      "bytes": "01",
+      "expect": {
+        "value": "1"
+      },
+      "notes": "one byte, no padding"
+    },
+    {
+      "name": "byte-max",
+      "bytes": "ff",
+      "expect": {
+        "value": "255"
+      },
+      "notes": "0xff alone is 255"
+    },
+    {
+      "name": "two-byte-boundary",
+      "bytes": "0100",
+      "expect": {
+        "value": "256"
+      },
+      "notes": "256 is 0x0100: the minimal form keeps an interior zero"
+    },
+    {
+      "name": "word-max",
+      "bytes": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "expect": {
+        "value": "115792089237316195423570985008687907853269984665640564039457584007913129639935"
+      },
+      "notes": "the largest EVM word: 32 0xff bytes"
+    },
+    {
+      "name": "non-minimal-zero",
+      "bytes": "00",
+      "expect": "reject",
+      "notes": "zero is the empty list, never 0x00"
+    },
+    {
+      "name": "non-minimal-one",
+      "bytes": "0001",
+      "expect": "reject",
+      "notes": "same integer as 0x01; a conforming decoder rejects the padding instead of normalising it"
+    },
+    {
+      "name": "overflow-33-bytes",
+      "bytes": "010000000000000000000000000000000000000000000000000000000000000000",
+      "expect": "reject",
+      "notes": "33 bytes cannot fit the 32-byte EVM word"
+    }
+  ]
+}
