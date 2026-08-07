@@ -177,7 +177,7 @@ mod tests {
     }
 
     fn request() -> http::Request<Vec<u8>> {
-        http::Request::get("https://api.cow.fi/")
+        http::Request::get("https://api.venue.example/")
             .body(Vec::new())
             .expect("test request builds")
     }
