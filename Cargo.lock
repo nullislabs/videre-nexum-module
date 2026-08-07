@@ -3517,7 +3517,10 @@ version = "0.1.0"
 dependencies = [
  "alloy-sol-types",
  "borsh",
+ "futures",
+ "tokio",
  "tracing",
+ "videre-host",
  "videre-sdk",
  "videre-test",
  "wit-bindgen 0.59.0",

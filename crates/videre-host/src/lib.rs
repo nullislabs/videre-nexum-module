@@ -34,6 +34,16 @@ pub use registry::{
     VenueActor, VenueAdapterKind, VenueId, VenueInvoker, VenueRegistry, VenueRegistryBuilder,
 };
 
+/// Runtime vocabulary an out-of-crate [`VenueRegistry::install_for_test`]
+/// caller needs: the liveness handle the install takes and the quota the
+/// builder is assembled over, so a venue crate's tests carry no direct
+/// nexum-runtime pin.
+#[cfg(feature = "test-utils")]
+pub mod test_utils {
+    pub use nexum_runtime::engine_config::SubmitQuota;
+    pub use nexum_runtime::host::actor::Liveness;
+}
+
 /// Status-poll channel buffer.
 const STATUS_CHANNEL_BUF: usize = 64;
 
