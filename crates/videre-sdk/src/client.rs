@@ -507,6 +507,21 @@ mod tests {
         }
     }
 
+    /// `padded` is a hand-rolled const decoder; `str::trim` is the
+    /// oracle the host and macros copies spell it with. Exhaustive over
+    /// every code point at both ends, so a decoder slip cannot land.
+    #[test]
+    fn padded_agrees_with_str_trim_over_every_code_point() {
+        for cp in 0..=0x10FFFF {
+            let Some(c) = char::from_u32(cp) else {
+                continue;
+            };
+            for s in [format!("{c}x"), format!("x{c}")] {
+                assert_eq!(padded(&s), s.trim().len() != s.len(), "U+{cp:04X}");
+            }
+        }
+    }
+
     #[test]
     fn ready_chain_completes_in_one_poll() {
         async fn two() -> u8 {
