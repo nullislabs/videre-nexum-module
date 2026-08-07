@@ -77,12 +77,21 @@ pub struct PostageV1 {
 
 impl PostageV1 {
     /// Refuse what `createBatch` would revert, answering the BZZ total:
-    /// a zero owner, a bucket depth of zero or not below `depth`, or a
-    /// total past the EVM word.
+    /// a zero owner, a zero per-chunk balance, a bucket depth of zero or
+    /// not below `depth`, or a total past the EVM word. The contract's
+    /// depth and balance floors are chain state this adapter cannot
+    /// read, so only the unconditional refusals are mirrored.
     fn validate(&self) -> Result<U256, VenueError> {
         if self.owner == [0u8; 20] {
             return Err(VenueError::InvalidBody(
                 "batch owner must not be the zero address".to_owned(),
+            ));
+        }
+        // Zero is always below `minimumInitialBalancePerChunk`, and a
+        // zero `gives` leg would report the purchase to policy as free.
+        if self.initial_balance_per_chunk == 0 {
+            return Err(VenueError::InvalidBody(
+                "initial balance per chunk must be non-zero".to_owned(),
             ));
         }
         if self.bucket_depth == 0 || self.bucket_depth >= self.depth {
@@ -192,12 +201,11 @@ impl VenueAdapter for PostageVenue {
 
     fn status(_receipt: Vec<u8>) -> Result<IntentStatus, VenueError> {
         // The batch id derives from the signing key only the host holds,
-        // and this adapter reads no chain state, so a poll stays
-        // retryable rather than reporting a terminal state it cannot
-        // observe.
-        Err(VenueError::Unavailable(
-            "postage settlement is observed by the embedding host".to_owned(),
-        ))
+        // and this adapter declares no chain capability, so the verb is
+        // permanently unimplementable here rather than transiently
+        // unavailable: `unavailable` would make a keeper poll forever
+        // (`retry_action` folds it to `try-next-block`).
+        Err(VenueError::Unsupported)
     }
 
     fn cancel(_receipt: Vec<u8>) -> Result<(), VenueError> {
@@ -213,6 +221,7 @@ impl VenueAdapter for PostageVenue {
 mod conformance {
     use std::path::Path;
 
+    use videre_sdk::nexum_sdk::prelude::hex;
     use videre_test::codec::{CodecVectors, Expectation};
     use videre_test::header::{GoldenAsset, HeaderGoldens};
     use videre_test::{MockTransport, SignError};
@@ -224,6 +233,37 @@ mod conformance {
 
     /// The published codec vector file, verbatim.
     const CODEC_VECTORS_JSON: &str = include_str!("../vectors/postage-body.json");
+
+    /// The postage stamp contract, restated from bee's mainnet chain
+    /// config rather than read back off [`POSTAGE_STAMP`].
+    const POSTAGE_STAMP_HEX: &str = "45a1502382541cd610cc9068e88727426b696293";
+
+    /// `createBatch` calldata for [`first_batch`], pinned verbatim
+    /// against `cast calldata`. Nothing derived from the `sol!` block
+    /// can pin it: transposing the two `uint8` parameters leaves both
+    /// the signature string and an `abi_decode` round trip unchanged,
+    /// so only a literal catches an argument-order or width drift.
+    const FIRST_BATCH_CALLDATA: &str = concat!(
+        "5239af71",
+        "0000000000000000000000000102030405060708090a0b0c0d0e0f1011121314",
+        "00000000000000000000000000000000000000000000000000000000000003e8",
+        "0000000000000000000000000000000000000000000000000000000000000011",
+        "0000000000000000000000000000000000000000000000000000000000000010",
+        "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+        "0000000000000000000000000000000000000000000000000000000000000000",
+    );
+
+    /// `createBatch` calldata for [`deep_immutable_batch`]: the only pin
+    /// on `immutableFlag`, which has no footprint in the header.
+    const DEEP_IMMUTABLE_CALLDATA: &str = concat!(
+        "5239af71",
+        "000000000000000000000000aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "0000000000000000000000000000000000000000000000000000000000000001",
+        "0000000000000000000000000000000000000000000000000000000000000018",
+        "0000000000000000000000000000000000000000000000000000000000000010",
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+        "0000000000000000000000000000000000000000000000000000000000000001",
+    );
 
     fn first_batch() -> PostageV1 {
         PostageV1 {
@@ -412,27 +452,22 @@ mod conformance {
         };
 
         // The purchase targets the postage contract on gnosis, moves no
-        // native value, and carries the createBatch calldata.
+        // native value, and carries the createBatch calldata verbatim.
         assert_eq!(tx.chain, GNOSIS);
-        assert_eq!(tx.to, POSTAGE_STAMP.as_slice());
+        assert_eq!(tx.to, hex::decode(POSTAGE_STAMP_HEX).unwrap());
         assert!(tx.value.is_empty(), "bzz moves by allowance, never value");
-        assert_eq!(&tx.data[..4], createBatchCall::SELECTOR.as_slice());
-        let call = createBatchCall::abi_decode(&tx.data).unwrap();
-        let batch = first_batch();
-        assert_eq!(call.owner, Address::from(batch.owner));
-        assert_eq!(
-            call.initialBalancePerChunk,
-            U256::from(batch.initial_balance_per_chunk),
-        );
-        assert_eq!(call.depth, batch.depth);
-        assert_eq!(call.bucketDepth, batch.bucket_depth);
-        assert_eq!(call.nonce, B256::from(batch.nonce));
-        assert!(!call.immutableFlag);
+        assert_eq!(hex::encode(&tx.data), FIRST_BATCH_CALLDATA);
+
+        let SubmitOutcome::RequiresSigning(immutable) =
+            PostageVenue::submit(body(deep_immutable_batch())).unwrap()
+        else {
+            panic!("postage submit must answer requires-signing");
+        };
+        assert_eq!(hex::encode(&immutable.data), DEEP_IMMUTABLE_CALLDATA);
 
         // The signer mock accepts, records, and answers a tx hash: the
         // pre-sign leg is proven without executing settlement.
-        let hash = transport.signer.sign_and_send(tx.clone()).unwrap();
-        assert_eq!(hash.len(), 32);
+        transport.signer.sign_and_send(tx.clone()).unwrap();
         assert_eq!(transport.signer.signed(), vec![tx]);
     }
 
@@ -475,6 +510,10 @@ mod conformance {
         let cases = [
             PostageV1 {
                 owner: [0; 20],
+                ..first_batch()
+            },
+            PostageV1 {
+                initial_balance_per_chunk: 0,
                 ..first_batch()
             },
             PostageV1 {
@@ -541,10 +580,12 @@ mod conformance {
     }
 
     #[test]
-    fn status_stays_retryable_and_cancel_is_unsupported() {
+    fn status_and_cancel_are_unsupported() {
+        // Terminal, not retryable: the adapter can never observe the
+        // batch, so a keeper must drop the watch rather than re-poll.
         assert!(matches!(
             PostageVenue::status(vec![1]),
-            Err(VenueError::Unavailable(_)),
+            Err(VenueError::Unsupported),
         ));
         assert!(matches!(
             PostageVenue::cancel(vec![1]),
