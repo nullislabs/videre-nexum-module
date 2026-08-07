@@ -10,7 +10,7 @@
 
 use std::cell::RefCell;
 
-use nexum_sdk::prelude::keccak256;
+use nexum_sdk::prelude::{B256, keccak256};
 use videre_sdk::UnsignedTx;
 use videre_sdk::value_flow::{UintError, decode_uint};
 
@@ -61,10 +61,10 @@ impl MockSigner {
         *self.scope.borrow_mut() = Some(chains.into_iter().collect());
     }
 
-    /// Validate, record, and "sign" `tx`, answering its deterministic
-    /// 32-byte tx hash. Equal txs always answer equal hashes, so a test
-    /// can prove a re-derived pre-sign leg is byte-identical.
-    pub fn sign_and_send(&self, tx: UnsignedTx) -> Result<Vec<u8>, SignError> {
+    /// Validate, record, and "sign" `tx`, answering its deterministic tx
+    /// hash. Equal txs always answer equal hashes, so a test can prove a
+    /// re-derived pre-sign leg is byte-identical.
+    pub fn sign_and_send(&self, tx: UnsignedTx) -> Result<B256, SignError> {
         if tx.to.len() != 20 {
             return Err(SignError::MalformedTo { len: tx.to.len() });
         }
@@ -100,7 +100,7 @@ impl MockSigner {
 
 /// Deterministic mock tx hash: keccak over a length-framed encoding of
 /// every field, so distinct txs cannot collide by concatenation.
-fn tx_hash(tx: &UnsignedTx) -> Vec<u8> {
+fn tx_hash(tx: &UnsignedTx) -> B256 {
     let mut preimage = Vec::with_capacity(8 + 4 * 2 + tx.to.len() + tx.value.len() + tx.data.len());
     preimage.extend_from_slice(&tx.chain.to_be_bytes());
     preimage.extend_from_slice(&tx.to);
@@ -108,7 +108,7 @@ fn tx_hash(tx: &UnsignedTx) -> Vec<u8> {
         preimage.extend_from_slice(&(field.len() as u64).to_be_bytes());
         preimage.extend_from_slice(field);
     }
-    keccak256(&preimage).to_vec()
+    keccak256(&preimage)
 }
 
 #[cfg(test)]
@@ -129,7 +129,6 @@ mod tests {
         let signer = MockSigner::new();
         let first = signer.sign_and_send(purchase_tx()).unwrap();
         let again = signer.sign_and_send(purchase_tx()).unwrap();
-        assert_eq!(first.len(), 32);
         assert_eq!(first, again, "equal txs must answer equal hashes");
         assert_eq!(signer.signed(), vec![purchase_tx(), purchase_tx()]);
         assert_eq!(signer.signed_count(), 2);
