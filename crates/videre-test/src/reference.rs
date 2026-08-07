@@ -45,6 +45,18 @@ pub struct ReferenceV2 {
     pub urgent: bool,
 }
 
+/// Third published version: a service purchase; the want is a
+/// display-grade service leg, never host-verified.
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, Eq, PartialEq)]
+pub struct ReferenceV3 {
+    /// Amount in wei.
+    pub amount_wei: u64,
+    /// Venue-scoped description of the purchased service.
+    pub service: String,
+    /// Unit count of the service, in venue-defined units.
+    pub units: u64,
+}
+
 /// The outer version enum; tag order is the schema, so append, never reorder.
 #[derive(IntentBody, Clone, Debug, Eq, PartialEq)]
 pub enum ReferenceBody {
@@ -52,11 +64,14 @@ pub enum ReferenceBody {
     V1(ReferenceV1),
     /// Version 2, wire tag 1.
     V2(ReferenceV2),
+    /// Version 3, wire tag 2.
+    V3(ReferenceV3),
 }
 
 /// The reference header derivation the goldens pin: gives the amount as
-/// native token, wants (v2) the same as an ERC-20 at the recipient
-/// address, authorises EIP-712. V1 wants nothing, a zero native amount.
+/// native token, authorises EIP-712. V1 wants nothing, a zero native
+/// amount; v2 wants the amount as an ERC-20 at the recipient address;
+/// v3 wants a display-grade service leg in venue-defined units.
 pub fn derive_reference_header(body: Vec<u8>) -> Result<IntentHeader, VenueError> {
     let (amount_wei, wants) = match ReferenceBody::from_bytes(&body)? {
         ReferenceBody::V1(quote) => (
@@ -74,6 +89,10 @@ pub fn derive_reference_header(body: Vec<u8>) -> Result<IntentHeader, VenueError
                 }),
                 amount: encode_uint(U256::from(quote.amount_wei)),
             },
+        ),
+        ReferenceBody::V3(quote) => (
+            quote.amount_wei,
+            AssetAmount::service(quote.service, U256::from(quote.units)),
         ),
     };
     Ok(IntentHeader {
@@ -110,6 +129,14 @@ mod tests {
             valid_until_ms: Some(1_700_000_000_000),
             recipient: (1..=20).collect(),
             urgent: true,
+        })
+    }
+
+    fn v3_service() -> ReferenceBody {
+        ReferenceBody::V3(ReferenceV3 {
+            amount_wei: 42,
+            service: "postage batch".to_owned(),
+            units: 2,
         })
     }
 
@@ -166,6 +193,14 @@ mod tests {
             )
             .unwrap()
             .notes = Some("option absent is a bare 0x00, bool false is 0x00".to_owned());
+        vectors
+            .push_round_trip("v3-service", &v3_service())
+            .unwrap()
+            .notes = Some(
+            "tag 0x02; a service want is display-grade, the codec is \
+             plain borsh"
+                .to_owned(),
+        );
 
         vectors
             .push_failure("empty-body", Vec::new(), Expectation::Empty)
@@ -221,6 +256,14 @@ mod tests {
             )
             .unwrap()
             .notes = Some("v2 adds an erc20 want at the recipient token address".to_owned());
+        goldens
+            .record(
+                "v3-service",
+                v3_service().to_bytes().unwrap(),
+                derive_reference_header,
+            )
+            .unwrap()
+            .notes = Some("v3 wants a display-grade service leg in venue-defined units".to_owned());
         goldens
     }
 

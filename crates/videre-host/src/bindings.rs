@@ -122,12 +122,15 @@ mod value_flow_smoke {
 
     #[test]
     fn identifiers_bind_unescaped() {
-        use videre::value_flow::types::{Asset, AssetAmount, Erc20};
+        use videre::value_flow::types::{Asset, AssetAmount, Erc20, ServiceDesc};
 
         let erc20 = Erc20 {
             token: vec![0u8; 20],
         };
         let _ = Asset::Native;
+        let _ = Asset::Service(ServiceDesc {
+            description: String::new(),
+        });
         let asset = Asset::Erc20(erc20);
 
         let amount = AssetAmount {
