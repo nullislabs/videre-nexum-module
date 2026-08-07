@@ -203,7 +203,7 @@ pub(crate) fn expand(input: &ItemImpl) -> syn::Result<TokenStream> {
             generate_all,
             with: {
                 "videre:types/types@0.1.0": ::videre_sdk::bindings::videre::types::types,
-                "videre:value-flow/types@0.1.0":
+                "videre:value-flow/types@1.0.0":
                     ::videre_sdk::bindings::videre::value_flow::types,
                 "videre:venue/client@0.1.0":
                     ::videre_sdk::bindings::videre::venue::client,

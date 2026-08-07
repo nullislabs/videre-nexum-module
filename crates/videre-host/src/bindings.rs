@@ -114,7 +114,7 @@ mod value_flow_smoke {
         inline: "
             package videre:value-flow-smoke;
             world smoke {
-                import videre:value-flow/types@0.1.0;
+                import videre:value-flow/types@1.0.0;
             }
         ",
         path: ["../../wit/videre-value-flow"],

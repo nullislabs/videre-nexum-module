@@ -3,7 +3,7 @@ package videre:types@0.1.0;
 /// The venue-neutral intent ontology. Depends only on value-flow; never on
 /// nexum:host, so the venue-error transport cases are its own.
 interface types {
-    use videre:value-flow/types@0.1.0.{asset-amount};
+    use videre:value-flow/types@1.0.0.{asset-amount};
 
     /// How an intent is authorised at its venue. Non-EVM schemes are 0.2+.
     variant auth-scheme {
