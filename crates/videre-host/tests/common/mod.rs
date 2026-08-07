@@ -125,7 +125,7 @@ pub fn status_event(update: videre_host::IntentStatusUpdate) -> ExtensionEvent {
 }
 
 /// The test `[chains]` set, so a chain-1 subscription admits.
-pub fn test_engine_config() -> EngineConfig {
+fn test_engine_config() -> EngineConfig {
     EngineConfig {
         chains: test_chain_configs(),
         ..EngineConfig::default()
