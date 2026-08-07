@@ -27,7 +27,8 @@ check() {
 }
 
 check -F $'\xe2\x80\x94' "This edit adds an em-dash. House style bans em-dashes: use an ASCII hyphen, a colon, or split the sentence."
-# The ASCII alternate excludes a pipe on either side of the run, so a markdown
-# table separator in a doc comment is not a banner.
-check -N '^.*[─━═]{4,}|^\s*(//|#|<!--|/\*)[^|]*[-=*_]{5,}[^|]*$' "This edit adds a banner or section-divider comment. House style bans banners: a section is a module boundary, split the file or add nothing."
+# The ASCII alternate exempts only a markdown table separator row: pipes,
+# dashes, colons, and spaces after the comment marker. A pipe-free run, any
+# =/*/_ run, or a dash run beside other text still counts as a banner.
+check -N '^.*[─━═]{4,}|^\s*(//|#|<!--|/\*)([^|]*[-=*_]{5,}[^|]*$|.*[=*_]{5,}|.*[^-|:\s].*-{5,}|.*-{5,}.*[^-|:\s])' "This edit adds a banner or section-divider comment. House style bans banners: a section is a module boundary, split the file or add nothing."
 exit 0
