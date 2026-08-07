@@ -8,7 +8,7 @@ This record was written after the fact (tracker issue #20).
 
 ## Context
 
-`videre:value-flow@0.1.0` defines `uint` as `list<u8>` in `wit/videre-value-flow/types.wit`.
+`videre:value-flow@1.0.0` defines `uint` as `list<u8>` in `wit/videre-value-flow/types.wit`.
 A bare byte list admits many encodings of one integer: `0x01`, `0x0001`, and `0x000001` all carry the value one.
 Ambiguous encodings make byte comparison unsafe.
 Two intent headers can then differ as bytes and agree as amounts, which opens a malleability seam in anything that hashes or compares the wire form.
@@ -19,7 +19,7 @@ The `uint` encoding is canonical and minimal-length.
 The bytes are the big-endian magnitude with no leading zero bytes.
 Zero is the empty list.
 A decoder rejects a non-minimal encoding; it does not normalise the padding away.
-An encoding longer than 32 bytes is also not a valid `uint`, because `videre:value-flow@0.1.0` is EVM-only and the EVM word bounds the value.
+An encoding longer than 32 bytes is also not a valid `uint`, because `videre:value-flow@1.0.0` is EVM-only and the EVM word bounds the value.
 Decoders compare amounts by integer value, not by byte equality, as the `types.wit` prose states.
 
 ## Consequences
