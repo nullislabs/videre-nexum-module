@@ -54,6 +54,18 @@
       "notes": "same integer as 0x01; a conforming decoder rejects the padding instead of normalising it"
     },
     {
+      "name": "word-padded-zero",
+      "bytes": "0000000000000000000000000000000000000000000000000000000000000000",
+      "expect": "reject",
+      "notes": "the ABI word form of zero; the canonical form is the empty list"
+    },
+    {
+      "name": "word-padded-one",
+      "bytes": "0000000000000000000000000000000000000000000000000000000000000001",
+      "expect": "reject",
+      "notes": "the ABI word form of one; a decoder must not exempt the word width from the minimality rule"
+    },
+    {
       "name": "overflow-33-bytes",
       "bytes": "010000000000000000000000000000000000000000000000000000000000000000",
       "expect": "reject",

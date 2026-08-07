@@ -19,11 +19,15 @@ The `uint` encoding is canonical and minimal-length.
 The bytes are the big-endian magnitude with no leading zero bytes.
 Zero is the empty list.
 A decoder rejects a non-minimal encoding; it does not normalise the padding away.
+An encoding longer than 32 bytes is also not a valid `uint`, because `videre:value-flow@0.1.0` is EVM-only and the EVM word bounds the value.
 Decoders compare amounts by integer value, not by byte equality, as the `types.wit` prose states.
 
 ## Consequences
 
 For accepted values, byte equality and integer equality coincide, so golden files can pin amounts byte-exact.
 `videre_sdk::value_flow` owns both directions: `encode_uint` emits the minimal form, and `decode_uint` rejects a leading zero byte and an encoding past 32 bytes.
+No adapter hand-rolls the encoding, and `videre-sdk`, `videre-test`, and `echo-venue` all route through `encode_uint`.
+`videre-host` does not yet decode the amount a guest adapter returns, so the rule binds the SDK and the vector file, not the host trust boundary.
+A later chain with a wider amount width reopens the 32-byte bound, not the minimality rule.
 `videre-test` publishes `crates/videre-test/vectors/uint.json`, and its reject vectors fail any decoder that tolerates padding, so the MUST has enforcement rather than prose only.
 The encoding is part of the 1.0 freeze surface; a change to it is a new major version of `videre:value-flow`.

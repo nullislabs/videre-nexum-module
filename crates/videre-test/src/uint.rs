@@ -212,6 +212,24 @@ mod tests {
                      padding instead of normalising it",
                 ),
                 vector(
+                    "word-padded-zero",
+                    vec![0x00; 32],
+                    UintExpectation::Reject,
+                    "the ABI word form of zero; the canonical form is the \
+                     empty list",
+                ),
+                vector(
+                    "word-padded-one",
+                    {
+                        let mut bytes = vec![0x00; 31];
+                        bytes.push(0x01);
+                        bytes
+                    },
+                    UintExpectation::Reject,
+                    "the ABI word form of one; a decoder must not exempt the \
+                     word width from the minimality rule",
+                ),
+                vector(
                     "overflow-33-bytes",
                     overflow,
                     UintExpectation::Reject,
@@ -258,7 +276,15 @@ mod tests {
             .iter()
             .map(|violation| violation.vector.as_str())
             .collect();
-        assert_eq!(failed, ["non-minimal-zero", "non-minimal-one"]);
+        assert_eq!(
+            failed,
+            [
+                "non-minimal-zero",
+                "non-minimal-one",
+                "word-padded-zero",
+                "word-padded-one",
+            ],
+        );
         for violation in &report.violations {
             assert!(
                 violation.detail.contains("expected a rejection"),

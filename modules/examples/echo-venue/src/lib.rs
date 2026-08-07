@@ -13,7 +13,8 @@
 // `Config` and `Fault` come from the macro's world bindgen at the crate
 // root: aliases of the SDK types, so the trait impl lines up.
 use nexum::host::chain;
-use videre_sdk::value_flow::{Asset, AssetAmount};
+use videre_sdk::nexum_sdk::prelude::U256;
+use videre_sdk::value_flow::{Asset, AssetAmount, encode_uint};
 use videre_sdk::{
     AuthScheme, IntentHeader, IntentStatus, Quotation, Settlement, SubmitOutcome, VenueAdapter,
     VenueError,
@@ -41,7 +42,7 @@ impl VenueAdapter for EchoVenue {
         Ok(IntentHeader {
             gives: AssetAmount {
                 asset: Asset::Native,
-                amount: minimal_be(body.len() as u64),
+                amount: encode_uint(U256::from(body.len() as u64)),
             },
             wants: zero_native(),
             settlement: Settlement { chain: 1 },
@@ -55,7 +56,7 @@ impl VenueAdapter for EchoVenue {
         Ok(Quotation {
             gives: AssetAmount {
                 asset: Asset::Native,
-                amount: minimal_be(body.len() as u64),
+                amount: encode_uint(U256::from(body.len() as u64)),
             },
             wants: zero_native(),
             fee: zero_native(),
@@ -89,14 +90,6 @@ fn zero_native() -> AssetAmount {
         asset: Asset::Native,
         amount: Vec::new(),
     }
-}
-
-/// Big-endian bytes with leading zeros trimmed: the minimal `uint`
-/// spelling, where an empty list is zero.
-fn minimal_be(value: u64) -> Vec<u8> {
-    let bytes = value.to_be_bytes();
-    let first = bytes.iter().position(|byte| *byte != 0);
-    first.map_or(Vec::new(), |index| bytes[index..].to_vec())
 }
 
 /// echo-venue as the `videre-test` conformance target: the pure header

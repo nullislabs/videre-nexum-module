@@ -8,6 +8,7 @@ pub use crate::bindings::videre::value_flow::types::*;
 
 /// Why bytes are not a canonical value-flow `uint` (ADR 0001).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[non_exhaustive]
 pub enum UintError {
     /// A leading zero byte; the canonical form is minimal-length and
     /// zero is the empty list.
