@@ -5,6 +5,11 @@
 //! policy-legible header (enforceable bzz erc20 `gives`, display-grade
 //! service `wants`) and its verdict stays advisory: a deny is logged and
 //! the submission proceeds to the requires-signing leg.
+//!
+//! The adapter is reached natively, through a wire projection of these
+//! Rust verbs rather than a booted `postage-venue.wasm` actor, so nothing
+//! here proves the guest-boot leg; that stays covered by the echo
+//! fixtures under `videre-host/tests`.
 
 use std::sync::{Arc, Mutex};
 
@@ -336,6 +341,60 @@ async fn a_guard_deny_stays_advisory_on_the_postage_path() {
         .signer
         .sign_and_send(tx_to_sdk(&tx))
         .expect("the signer accepts the advisory-denied purchase");
+}
+
+#[tokio::test]
+async fn the_priced_and_unsupported_verbs_project_through_the_registry() {
+    let log = CallLog::default();
+    let guard = Arc::new(RecordingGuard {
+        log: Arc::clone(&log),
+        seen: Arc::new(Mutex::new(Vec::new())),
+    });
+    let (registry, venue) = registry_with(guard, Arc::clone(&log));
+
+    let quoted = registry
+        .quote("postage-keeper", &venue, purchase_body())
+        .await
+        .expect("quote succeeds");
+
+    // The priced legs are the header's and the fee is its own zero bzz
+    // leg: a transposed projection would move the empty amount.
+    let wire::value_flow::Asset::Erc20(fee) = &quoted.fee.asset else {
+        panic!("the venue fee is a bzz erc20 leg");
+    };
+    assert_eq!(fee.token, BZZ_TOKEN.as_slice());
+    assert!(
+        quoted.fee.amount.is_empty(),
+        "the chain charges no venue fee"
+    );
+    assert_eq!(quoted.gives.amount, encode_uint(U256::from(2_000u64) << 20));
+    assert_eq!(quoted.wants.amount, encode_uint(U256::ONE << 20));
+    assert_eq!(quoted.valid_until_ms, u64::MAX);
+
+    // A quotation valid past the ledger horizon records nothing, so the
+    // quoted bytes still submit rather than being refused as stale.
+    registry
+        .submit("postage-keeper", &venue, purchase_body())
+        .await
+        .expect("a horizon-exceeding quote does not stale its submit");
+
+    // Pricing derives no header and runs no checkpoint; only the submit
+    // that follows reaches the guard.
+    assert_eq!(
+        *log.lock().unwrap(),
+        ["quote", "derive-header", "guard", "submit"],
+    );
+
+    // Both observation verbs stay terminally unsupported through the
+    // registry, so a keeper drops the watch rather than re-polling.
+    assert!(matches!(
+        registry.status(&venue, vec![1]).await,
+        Err(wire::VenueError::Unsupported),
+    ));
+    assert!(matches!(
+        registry.cancel(&venue, vec![1]).await,
+        Err(wire::VenueError::Unsupported),
+    ));
 }
 
 #[tokio::test]
