@@ -25,6 +25,15 @@ videre-sdk = { path = "../../../crates/videre-sdk" }
 wit-bindgen = { version = "0.59", default-features = false, features = ["macros", "realloc"] }
 
 [dev-dependencies]
+# `BoxFuture` for the native `VenueInvoker` projection the policy
+# round-trip test installs.
+futures = "0.3"
+# Async runtime for the registry-driven policy round-trip tests.
+tokio = { version = "1", features = ["macros", "rt"] }
+# The host registry whose derive-header, guard, submit sequence the
+# advisory policy round trip drives; `test-utils` opens the direct
+# install seam.
+videre-host = { path = "../../../crates/videre-host", features = ["test-utils"] }
 # The conformance kit: the published header goldens and codec vectors,
 # plus the signer mock the pre-sign proof drives.
 videre-test = { path = "../../../crates/videre-test" }

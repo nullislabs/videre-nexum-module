@@ -214,6 +214,11 @@ impl VenueAdapter for PostageVenue {
     }
 }
 
+/// The advisory policy loop proven through the host registry: derive
+/// header, guard checkpoint, submit, plus the requires-signing leg.
+#[cfg(test)]
+mod policy_round_trip;
+
 /// postage-venue as the `videre-test` conformance target: the published
 /// header goldens and codec vectors pin the pure derivations, and the
 /// signer mock proves the pre-sign leg end to end.
