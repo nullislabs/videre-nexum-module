@@ -263,8 +263,7 @@ mod tests {
                 derive_reference_header,
             )
             .unwrap()
-            .notes =
-            Some("v3 wants a display-grade service leg in venue-defined units".to_owned());
+            .notes = Some("v3 wants a display-grade service leg in venue-defined units".to_owned());
         goldens
     }
 

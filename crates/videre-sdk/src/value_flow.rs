@@ -55,7 +55,8 @@ impl AssetAmount {
 
     /// A service leg counting `units` of a venue-defined service, with the
     /// count in the canonical `uint` encoding. Display-grade by
-    /// construction: never host-verified.
+    /// construction: never host-verified, so it belongs on a `wants` leg
+    /// and a guard refuses it on the enforceable `gives` leg.
     #[must_use]
     pub fn service(description: impl Into<String>, units: U256) -> Self {
         Self {

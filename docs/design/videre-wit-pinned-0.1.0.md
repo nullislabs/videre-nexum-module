@@ -5,7 +5,7 @@
 > The port applies house-lint normalization only (ASCII in place of the em-dash in the title); the content is otherwise unchanged.
 > Bare issue and PR numbers refer to the pre-carve nullislabs/shepherd tracker, not to this repository's tracker.
 > The live `wit/` tree in this repository is authoritative for the current surface.
-> It has grown additively since this pin: `venue-error` now also carries `invalid-receipt` and `receipt-mismatch`.
+> It has grown additively since this pin: `venue-error` now also carries `invalid-receipt` and `receipt-mismatch`, and `asset` now also carries `service(service-desc)`.
 
 The byte-exact target the M1 contract fold (#366) rewrites to, and the oracle
 checks against. Supersedes `videre-split-plan.md` §7.4 where they differ.

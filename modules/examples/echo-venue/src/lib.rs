@@ -35,11 +35,11 @@ impl VenueAdapter for EchoVenue {
     }
 
     fn derive_header(body: Vec<u8>) -> Result<IntentHeader, VenueError> {
-        // The echo venue gives back exactly the bytes handed to it, so the
-        // header's `gives` amount is the body length: enough to exercise
-        // the value-flow vocabulary without a real schema. The want is
-        // service-shaped: the echo itself, one unit per echoed byte, a
-        // display-grade leg by construction.
+        // The submitter pays one native unit per byte and wants the echo
+        // of those bytes back, so both legs scale with the body length:
+        // enough to exercise the value-flow vocabulary without a real
+        // schema. The want is service-shaped, display-grade by
+        // construction; the enforceable `gives` leg stays a chain asset.
         Ok(IntentHeader {
             gives: AssetAmount {
                 asset: Asset::Native,

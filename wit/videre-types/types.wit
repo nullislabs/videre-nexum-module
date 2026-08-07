@@ -18,6 +18,8 @@ interface types {
 
     /// Adapter-derived description of an intent body: the ontology guard policy
     /// runs on. Policy has teeth on `gives`; `wants` is display-grade.
+    /// A `service` asset is display-grade in either leg, so a guard MUST refuse
+    /// a `service` on `gives` rather than pass an uncapped egress.
     record intent-header {
         gives: asset-amount,
         wants: asset-amount,
