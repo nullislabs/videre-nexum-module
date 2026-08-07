@@ -4,7 +4,8 @@
 //! and drives a [`VenueClient`] through the [`VenueTransport`] seam.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use videre_sdk::value_flow::{Asset, AssetAmount};
+use videre_sdk::nexum_sdk::prelude::U256;
+use videre_sdk::value_flow::{Asset, AssetAmount, encode_uint};
 use videre_sdk::{
     AuthScheme, BodyError, ClientError, Config, Fault, IntentBody, IntentHeader, IntentStatus,
     Quotation, Settlement, SubmitOutcome, Venue, VenueAdapter, VenueClient, VenueError, VenueFault,
@@ -71,7 +72,7 @@ impl VenueAdapter for DemoAdapter {
         Ok(IntentHeader {
             gives: AssetAmount {
                 asset: Asset::Native,
-                amount: amount_wei.to_be_bytes().to_vec(),
+                amount: encode_uint(U256::from(amount_wei)),
             },
             wants: AssetAmount {
                 asset: Asset::Native,
@@ -91,7 +92,7 @@ impl VenueAdapter for DemoAdapter {
         Ok(Quotation {
             gives: AssetAmount {
                 asset: Asset::Native,
-                amount: amount_wei.to_be_bytes().to_vec(),
+                amount: encode_uint(U256::from(amount_wei)),
             },
             wants: zero.clone(),
             fee: zero,
@@ -245,7 +246,8 @@ fn adapter_projects_the_header_from_a_versioned_body() {
     let bytes = v2_body().to_bytes().unwrap();
     let header = DemoAdapter::derive_header(bytes).unwrap();
     assert_eq!(header.gives.asset, Asset::Native);
-    assert_eq!(header.gives.amount, 1_000_000u64.to_be_bytes().to_vec());
+    // Canonical uint: minimal big-endian, so 1_000_000 is three bytes.
+    assert_eq!(header.gives.amount, vec![0x0f, 0x42, 0x40]);
     assert_eq!(header.settlement, Settlement { chain: 1 });
     assert_eq!(header.authorisation, AuthScheme::Eip712);
 }
@@ -295,10 +297,7 @@ fn quote_typestate_prices_then_submits_the_quoted_body() {
     let client = VenueClient::<DemoVenue, _>::with_transport(InProcessClient);
 
     let quoted = run(client.quote(&v2_body())).unwrap();
-    assert_eq!(
-        quoted.quotation().gives.amount,
-        1_000_000u64.to_be_bytes().to_vec()
-    );
+    assert_eq!(quoted.quotation().gives.amount, vec![0x0f, 0x42, 0x40]);
     assert_eq!(quoted.quotation().valid_until_ms, 1_700_000_000_000);
 
     let outcome = run(drive(&client)).unwrap();

@@ -20,6 +20,6 @@ Write each ADR in the house documentation style that `AGENTS.md` sets.
 
 ## Landing places
 
-Record the value-flow freeze-gate decisions (tracker issue #20) here.
-Record the WIT variant-growth caveat with them (tracker issue #47).
+The value-flow freeze-gate decisions (tracker issue #20) landed as `0001` and `0002`.
+Record the WIT variant-growth caveat and the rest of that batch (tracker issue #47) from `0003` on.
 Put design documents and runbooks in `docs/design/`, not here.
