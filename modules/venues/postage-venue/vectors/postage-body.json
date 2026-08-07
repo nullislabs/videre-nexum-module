@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "schema": "postage-venue/postage-body",
+  "vectors": [
+    {
+      "name": "v1-first-batch",
+      "bytes": "000102030405060708090a0b0c0d0e0f1011121314e80300000000000011100102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2000",
+      "expect": "round-trip",
+      "notes": "tag 0x00; owner 20 raw bytes (fixed array, no length prefix), u64 little-endian, depth and bucket depth one byte each, nonce 32 raw bytes, bool one byte"
+    },
+    {
+      "name": "v1-deep-immutable",
+      "bytes": "00aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa01000000000000001810ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff01",
+      "expect": "round-trip",
+      "notes": "bool true is 0x01"
+    },
+    {
+      "name": "empty-body",
+      "bytes": "",
+      "expect": "empty",
+      "notes": "no version tag at all"
+    },
+    {
+      "name": "unknown-version",
+      "bytes": "090102030405060708090a0b0c0d0e0f1011121314e80300000000000011100102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f2000",
+      "expect": {
+        "unknown-version": {
+          "version": 9
+        }
+      },
+      "notes": "tag 0x09 names no published version"
+    },
+    {
+      "name": "truncated-payload",
+      "bytes": "000102030405060708090a0b0c0d0e0f1011121314e80300000000000011100102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
+      "expect": {
+        "malformed": {
+          "version": 0
+        }
+      },
+      "notes": "known tag, payload cut one byte short"
+    },
+    {
+      "name": "trailing-bytes",
+      "bytes": "000102030405060708090a0b0c0d0e0f1011121314e80300000000000011100102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f200000",
+      "expect": {
+        "malformed": {
+          "version": 0
+        }
+      },
+      "notes": "decoding must consume the payload exactly"
+    }
+  ]
+}

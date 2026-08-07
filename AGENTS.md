@@ -21,7 +21,7 @@ A keeper module calls a registered venue through the `videre:venue/client` inter
 - `crates/videre-macros`: the proc macros `#[venue]`, `#[keeper]`, and `derive(IntentBody)`; `crates/no-std-probe` is the compile-only `#![no_std]` probe for that derive.
 - `crates/videre-status-body`: the versioned codec for the opaque status body that the host event stream carries.
 - `crates/videre-test`: the conformance kit for venue adapters: codec round-trip vectors, header-derivation golden fixtures, and mock transports.
-- `modules/`: the echo-venue reference adapter with its paired echo-client and echo-keeper modules, plus two fixtures: the evil-by-design `flaky-venue` for supervisor recovery tests and `logging-venue` for the venue logging-capability tests.
+- `modules/`: the echo-venue reference adapter with its paired echo-client and echo-keeper modules, two fixtures (the evil-by-design `flaky-venue` for supervisor recovery tests and `logging-venue` for the venue logging-capability tests), and the genuine second venue `postage-venue` under `modules/venues/`.
 - `wit/`: the `videre:venue`, `videre:types`, and `videre:value-flow` WIT packages, plus the cross-repo deps vendored under `wit/deps/`.
 - `docs/`: architecture decision records under `docs/adr/`, and design documents and runbooks under `docs/design/`; each `README.md` there states the local convention.
 

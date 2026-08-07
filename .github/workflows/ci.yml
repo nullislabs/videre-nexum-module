@@ -68,14 +68,15 @@ jobs:
       - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
         with:
           tool: nextest
-      # Build all 5 guest wasms ONCE (release/wasm32-wasip2): the single source of
+      # Build all 6 guest wasms ONCE (release/wasm32-wasip2): the single source of
       # truth for guest buildability and the artifacts the integration tests load.
       # Per-module size report folded in; a compile break still names the offending
       # crate and -D warnings still applies.
       - name: build module wasms (+ size report)
         run: |
           cargo build --release --target wasm32-wasip2 --locked \
-            -p echo-venue -p echo-client -p echo-keeper -p flaky-venue -p logging-venue
+            -p echo-venue -p echo-client -p echo-keeper -p flaky-venue -p logging-venue \
+            -p postage-venue
           {
             echo "### module .wasm sizes"
             echo "| module | bytes |"

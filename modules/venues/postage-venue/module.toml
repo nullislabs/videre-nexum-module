@@ -1,0 +1,25 @@
+# postage-venue adapter manifest - the Swarm postage batch purchase.
+# Declares logging alone: every leg derives purely from the body and the
+# pinned Gnosis contract addresses, so the adapter needs no transport,
+# and the per-component world imports nexum:host/logging and nothing
+# else.
+
+[module]
+name = "postage-venue"
+version = "0.1.0"
+kind = "venue-adapter"
+
+[capabilities]
+required = ["logging"]
+optional = []
+
+[capabilities.http]
+allow = []
+
+[config]
+name = "postage-venue"
+
+# Body-schema versions this adapter decodes: the handshake authority.
+# Install asserts the adapter's body-versions export equals it.
+[venue]
+body_versions = [1]
