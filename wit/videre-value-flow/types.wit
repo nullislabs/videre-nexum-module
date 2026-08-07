@@ -1,7 +1,12 @@
-package videre:value-flow@0.1.0;
+package videre:value-flow@1.0.0;
 
 /// Egress-neutral vocabulary for value in motion. Carries no dependency so it
-/// outlives any contract built on it. EVM-only in 0.1.
+/// outlives any contract built on it. EVM-only in 1.0.
+///
+/// Frozen at 1.0 under the strict policy in
+/// docs/design/value-flow-versioning-policy.md: record fields may grow
+/// additively within 1.x, variant cases are closed, and any variant growth
+/// is 2.0.
 interface types {
     /// 20-byte EVM address, big-endian.
     type address = list<u8>;
@@ -24,7 +29,8 @@ interface types {
         description: string,
     }
 
-    /// A kind of value that can move. erc721/erc1155/offchain are 0.2+.
+    /// A kind of value that can move. The case set is closed at 1.0:
+    /// erc721/erc1155/offchain are 2.0.
     variant asset {
         /// The settlement chain's gas token.
         native,

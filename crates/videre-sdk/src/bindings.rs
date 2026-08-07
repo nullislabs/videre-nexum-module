@@ -16,7 +16,7 @@ wit_bindgen::generate!({
 
 world sdk-imports {
     import videre:types/types@0.1.0;
-    import videre:value-flow/types@0.1.0;
+    import videre:value-flow/types@1.0.0;
     import nexum:host/types@0.1.0;
     import nexum:host/chain@0.1.0;
     import nexum:host/messaging@0.1.0;

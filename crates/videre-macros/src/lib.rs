@@ -183,7 +183,7 @@ pub fn venue(attr: TokenStream, item: TokenStream) -> TokenStream {
             with: {
                 "nexum:host/types@0.1.0": ::videre_sdk::bindings::nexum::host::types,
                 "videre:types/types@0.1.0": ::videre_sdk::bindings::videre::types::types,
-                "videre:value-flow/types@0.1.0":
+                "videre:value-flow/types@1.0.0":
                     ::videre_sdk::bindings::videre::value_flow::types,
             },
         });

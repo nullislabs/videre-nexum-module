@@ -24,6 +24,6 @@ The restructuring goes further than the ratify-as-invalid option: the invalid st
 
 No consumer validates a native payload, because none exists.
 `erc721`, `erc1155`, `service`, and `offchain` are separate cases, never payloads of `native`.
-`service` landed before the freeze because a service-shaped want has no other spelling (tracker issue #29); `erc721`, `erc1155`, and `offchain` stay 0.2+.
+`service` landed before the freeze because a service-shaped want has no other spelling (tracker issue #29); `erc721`, `erc1155`, and `offchain` wait for 2.0.
 The variant is closed at the value-flow 1.0 freeze; case growth is a new major version.
 The freeze semantics themselves are recorded separately (tracker issue #47).
