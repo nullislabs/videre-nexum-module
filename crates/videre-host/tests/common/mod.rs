@@ -39,11 +39,17 @@ const SKIP_VAR: &str = "VIDERE_SKIP_MISSING_WASMS";
 /// passing test. `VIDERE_SKIP_MISSING_WASMS` opts back into the skip, except
 /// under `CI` where the gate may not excuse itself.
 pub fn module_wasm_or_skip(module_name: &str) -> Option<PathBuf> {
-    wasm_or_skip(
-        module_name,
-        std::env::var_os(SKIP_VAR).is_some(),
-        std::env::var_os("CI").is_some(),
-    )
+    wasm_or_skip(module_name, env_flag(SKIP_VAR), env_flag("CI"))
+}
+
+/// The value semantics under [`env_flag`]: empty, `0`, and `false` read
+/// as unset, so `VIDERE_SKIP_MISSING_WASMS=0` turns the skip back off.
+pub fn flag_enabled(value: &str) -> bool {
+    !value.is_empty() && value != "0" && value != "false"
+}
+
+fn env_flag(var: &str) -> bool {
+    std::env::var(var).as_deref().is_ok_and(flag_enabled)
 }
 
 /// The seam under [`module_wasm_or_skip`], env reads lifted out so
