@@ -2,7 +2,7 @@
 
 > Provenance: this is a historical document, recovered after the repo carve dropped the `docs/` tree.
 > The source is the pre-carve monorepo, nullislabs/shepherd commit `9e5e36c`, path `videre-wit-pinned-0.1.0.md` under its design tree.
-> The port applies carve-era path fixups and house-lint normalization (ASCII in place of em-dashes); the content is otherwise unchanged.
+> The port applies house-lint normalization only (ASCII in place of the em-dash in the title); the content is otherwise unchanged.
 > Bare issue and PR numbers refer to the pre-carve nullislabs/shepherd tracker, not to this repository's tracker.
 > The live `wit/` tree in this repository is authoritative for the current surface.
 > It has grown additively since this pin: `venue-error` now also carries `invalid-receipt` and `receipt-mismatch`.

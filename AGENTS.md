@@ -23,6 +23,7 @@ A keeper module calls a registered venue through the `videre:venue/client` inter
 - `crates/videre-test`: the conformance kit for venue adapters: codec round-trip vectors, header-derivation golden fixtures, and mock transports.
 - `modules/`: the echo-venue reference adapter with its paired echo-client and echo-keeper modules, plus two fixtures: the evil-by-design `flaky-venue` for supervisor recovery tests and `logging-venue` for the venue logging-capability tests.
 - `wit/`: the `videre:venue`, `videre:types`, and `videre:value-flow` WIT packages, plus the cross-repo deps vendored under `wit/deps/`.
+- `docs/`: architecture decision records under `docs/adr/`, and design documents and runbooks under `docs/design/`; each `README.md` there states the local convention.
 
 `extensions.toml` is the client-capability registry for this composition root: it declares the per-namespace rows that module world synthesis emits beyond the core `nexum:host` table.
 Its `client` row maps a `[capabilities]` declaration to the `videre:venue/client@0.1.0` import, and names the WIT packages that the resolve path needs.
