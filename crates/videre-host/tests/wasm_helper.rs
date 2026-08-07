@@ -4,7 +4,7 @@
 
 mod common;
 
-use common::wasm_or_skip;
+use common::{flag_enabled, wasm_or_skip};
 
 #[test]
 #[should_panic(expected = "run `just build-modules`")]
@@ -21,4 +21,14 @@ fn missing_wasm_skips_when_opted_in() {
 #[should_panic(expected = "run `just build-modules`")]
 fn ci_overrides_the_skip_opt_in() {
     wasm_or_skip("no-such-module", true, true);
+}
+
+#[test]
+fn empty_zero_and_false_flag_values_read_as_unset() {
+    for v in ["", "0", "false"] {
+        assert!(!flag_enabled(v), "{v:?}");
+    }
+    for v in ["1", "true", "yes"] {
+        assert!(flag_enabled(v), "{v:?}");
+    }
 }
