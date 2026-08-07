@@ -7,7 +7,6 @@ mod common;
 use std::process::Command;
 use std::sync::Arc;
 
-use nexum_runtime::bindings::nexum;
 use nexum_runtime::engine_config::{AdapterEntry, EngineConfig, ModuleEntry};
 use nexum_runtime::host::component::ChainMethod;
 use nexum_runtime::host::extension::Extension;
@@ -37,10 +36,7 @@ async fn e2e_echo_venue_boots_and_submits_through_the_generic_seam() {
     chain.on_method(ChainMethod::EthBlockNumber, "\"0x1\"");
     let components = mock_components_from(&chain, MockStateStore::new());
 
-    let mut engine_config = wasmtime::Config::new();
-    engine_config.wasm_component_model(true);
-    engine_config.consume_fuel(true);
-    let engine = wasmtime::Engine::new(&engine_config).expect("wasmtime engine");
+    let engine = common::make_wasmtime_engine();
 
     let config = EngineConfig {
         adapters: vec![AdapterEntry {
@@ -72,13 +68,7 @@ async fn e2e_echo_venue_boots_and_submits_through_the_generic_seam() {
 
     // One block drives the worker's on_block submission; the registry the
     // extension published on the service map observes the accepted receipt.
-    let block = nexum::host::types::Block {
-        chain_id: 1,
-        number: 19_000_000,
-        hash: vec![0xab; 32],
-        timestamp: 1_700_000_000_000,
-    };
-    assert_eq!(supervisor.dispatch_block(block).await, 1);
+    assert_eq!(supervisor.dispatch_block(common::block(1)).await, 1);
     let updates = registry.poll_status_transitions().await;
     assert!(
         updates.iter().any(|u| u.venue == "echo-venue"),
