@@ -2,15 +2,12 @@
 build:
     cargo build --workspace
 
-# Build the reference venue adapter (echo-venue) for wasm32-wasip2. Its
-# per-component world pins the #[videre_sdk::venue] acceptance test.
-build-venue:
-    cargo build --target wasm32-wasip2 --release -p echo-venue
-
-# Build every guest module wasm in this repo (examples + fixtures).
+# Build every guest module wasm in this repo. The venues are native Rust
+# crates now, so only the echo-client and echo-keeper modules build for
+# wasm.
 build-modules:
     cargo build --target wasm32-wasip2 --release \
-        -p echo-venue -p echo-client -p echo-keeper -p flaky-venue
+        -p echo-client -p echo-keeper
 
 # Run the test suite.
 test:
@@ -41,7 +38,7 @@ ci:
     cargo clippy --workspace --all-targets --all-features -- -D warnings
     cargo doc --workspace --no-deps
     cargo build --release --target wasm32-wasip2 \
-        -p echo-venue -p echo-client -p echo-keeper -p flaky-venue
+        -p echo-client -p echo-keeper
     # nextest for the suite (as CI does); doctests run separately since nextest
     # does not cover them.
     cargo nextest run --workspace --all-features --no-fail-fast
