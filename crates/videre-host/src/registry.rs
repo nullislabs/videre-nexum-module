@@ -250,7 +250,8 @@ impl VenueRegistry {
     }
 
     /// Every registered venue's declared body-version set, the input to the
-    /// keeper handshake in [`crate::Videre::admit_worker`].
+    /// keeper handshake that [`crate::Videre`] runs in its `admit_worker`
+    /// hook.
     #[must_use]
     pub fn body_versions(&self) -> BTreeMap<VenueId, BTreeSet<u32>> {
         self.inner
