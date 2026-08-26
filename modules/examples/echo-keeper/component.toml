@@ -1,33 +1,29 @@
-# echo-keeper module manifest - the blessed keeper half of the echo
+# echo-keeper component manifest - the blessed keeper half of the echo
 # pair. It drives the echo-venue adapter through the typed client, so it
-# declares the `client` capability alongside `logging`; the per-module
+# declares the `client` dependency alongside `logging`; the per-component
 # world the macro derives imports exactly videre:venue/client and
 # nexum:host/logging.
 
-[module]
+[component]
 name = "echo-keeper"
 version = "0.1.0"
-# Placeholder content hash; parsed but not verified in 0.2.
-component = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
-[capabilities]
+[dependencies]
 # `client` grants the videre:venue/client import (required by
 # #[videre_sdk::keeper]); `logging` the log sink.
-required = ["client", "logging"]
-optional = []
-
-[capabilities.http]
-allow = []
+client = {}
+logging = {}
 
 # Drive the venue on every chain-1 block.
-[[subscription]]
-kind     = "block"
+[[trigger]]
+on = "block"
 chain_id = 1
 
 # Observe the status transitions the registry polls from the echo-venue
-# adapter.
-[[subscription]]
-kind  = "intent-status"
+# adapter. `intent-status` is videre's own trigger kind, so boot validates
+# it against the wired extensions.
+[[trigger]]
+on = "intent-status"
 venue = "echo-venue"
 
 [config]
