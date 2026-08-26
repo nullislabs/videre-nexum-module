@@ -19,7 +19,6 @@ world sdk-imports {
     import videre:value-flow/types@0.1.0;
     import nexum:host/types@0.1.0;
     import nexum:host/chain@0.1.0;
-    import nexum:host/messaging@0.1.0;
     import videre:venue/client@0.1.0;
 }
 ",
