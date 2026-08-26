@@ -1,19 +1,20 @@
 //! The generic keeper run: [`Keeper::run`] assembles the world-neutral
-//! `nexum_sdk::keeper` stores ([`WatchSet`], [`Gates`], [`Retrier`],
+//! `nexum_sdk::keeper` stores ([`CommitmentSet`], [`Gates`], [`Retrier`],
 //! [`Journal`]) over a [`Poller`] and routes submissions through the
 //! [`VenueTransport`] seam. [`Outcome`] is the shared [`Poller::Outcome`]
 //! a keeper's pollers produce.
 
 use nexum_sdk::host::{Fault, LocalStoreHost};
 use nexum_sdk::keeper::{
-    Gates, Journal, Mark, Poller, Reservation, Retrier, RetryAction, Tick, WatchRef, WatchSet,
+    CommitmentRef, CommitmentSet, Gates, Journal, Mark, Poller, Reservation, Retrier, RetryAction,
+    Tick,
 };
 use nexum_sdk::prelude::{hex, keccak256};
 
 use crate::client::{VenueId, VenueTransport};
 use crate::{SubmitOutcome, UnsignedTx, VenueFault};
 
-/// What one poll asks the run to do with its watch.
+/// What one poll asks the run to do with its commitment.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum Outcome {
@@ -21,17 +22,18 @@ pub enum Outcome {
     Submit(Vec<u8>),
     /// Nothing to do yet; the next tick re-polls.
     WaitBlock,
-    /// Gate the watch for `seconds` on the epoch clock.
+    /// Gate the commitment for `seconds` on the epoch clock.
     Backoff {
         /// Seconds to wait before the next poll.
         seconds: u64,
     },
-    /// The commitment is spent or unservable; drop the watch.
+    /// The commitment is spent or unservable; drop it from the set.
     Drop,
 }
 
-/// Default `[limits.reconcile]` `max_per_tick`: stranded reservations
-/// the top-of-sweep reconcile pass resolves per run.
+/// Default reconcile budget: stranded reservations the top-of-sweep
+/// reconcile pass resolves per tick. Override it per keeper with
+/// [`Keeper::with_reconcile_budget`].
 pub const DEFAULT_RECONCILE_BUDGET: usize = 16;
 
 /// A keeper: one poller bound to one venue, run over the
@@ -55,9 +57,8 @@ impl<S, P> Keeper<S, P> {
         }
     }
 
-    /// Override the per-tick reconcile budget (`[limits.reconcile]`
-    /// `max_per_tick`). The fresh-watch loop is never budget-bounded;
-    /// only the reconcile pass is.
+    /// Override the per-tick reconcile budget. The fresh-commitment
+    /// loop is never budget-bounded; only the reconcile pass is.
     #[must_use]
     pub fn with_reconcile_budget(mut self, max_per_tick: usize) -> Self {
         self.max_per_tick = max_per_tick;
@@ -72,7 +73,7 @@ impl<S, P> Keeper<S, P> {
 
 impl<S, P: VenueTransport> Keeper<S, P> {
     /// Run one sweep at `tick`: the [`reconcile`] pass first (budget-bounded),
-    /// then every gate-ready watch is polled and an [`Outcome::Submit`]
+    /// then every gate-ready commitment is polled and an [`Outcome::Submit`]
     /// body reserved on its [`submission_key`] before the venue await,
     /// committed on acceptance.
     ///
@@ -83,13 +84,13 @@ impl<S, P: VenueTransport> Keeper<S, P> {
     /// marker at the submit arm is owned by this tick's reconcile and never
     /// re-POSTed; a `COMMITTED` marker is an idempotent skip. Store faults
     /// abort the run (bar the best-effort commit and marker clear); venue
-    /// refusals fold into per-watch retry actions.
+    /// refusals fold into per-commitment retry actions.
     pub async fn run<H>(&self, host: &H, tick: &Tick) -> Result<RunReport, Fault>
     where
         H: LocalStoreHost,
         S: Poller<H, Outcome = Outcome>,
     {
-        let watches = WatchSet::new(host);
+        let commitments = CommitmentSet::new(host);
         let gates = Gates::new(host);
         let retrier = Retrier::new(host);
         let journal = Journal::submitted(host);
@@ -103,22 +104,22 @@ impl<S, P: VenueTransport> Keeper<S, P> {
         report.reconciled_unsigned = rec.unsigned.len();
         report.unsigned.extend(rec.unsigned);
 
-        for key in watches.list()? {
-            let Some(watch) = WatchRef::parse(&key) else {
+        for key in commitments.list()? {
+            let Some(commitment) = CommitmentRef::parse(&key) else {
                 report.skipped += 1;
                 continue;
             };
-            if !gates.is_ready(watch, tick.block, tick.epoch_s)? {
+            if !gates.is_ready(commitment, tick.block, tick.epoch_s)? {
                 report.gated += 1;
                 continue;
             }
-            let Some(params) = watches.get(watch)? else {
+            let Some(params) = commitments.get(commitment)? else {
                 report.skipped += 1;
                 continue;
             };
             report.polled += 1;
 
-            let action = match self.source.poll(host, watch, &params, tick) {
+            let action = match self.source.poll(host, commitment, &params, tick) {
                 Outcome::Submit(body) => {
                     let key = submission_key(&self.venue, &body);
                     match journal.mark(&key)? {
@@ -144,7 +145,7 @@ impl<S, P: VenueTransport> Keeper<S, P> {
                                     // Best-effort: a commit fault just
                                     // reconciles next tick.
                                     let _ = journal.commit(&key);
-                                    if let Err(fault) = retrier.clear_refusal(watch) {
+                                    if let Err(fault) = retrier.clear_refusal(commitment) {
                                         tracing::error!(
                                             %fault,
                                             "refusal-marker clear failed after commit",
@@ -176,7 +177,7 @@ impl<S, P: VenueTransport> Keeper<S, P> {
                 RetryAction::Drop => report.dropped += 1,
                 _ => report.retried += 1,
             }
-            retrier.apply(watch, action, tick)?;
+            retrier.apply(commitment, action, tick)?;
         }
         Ok(report)
     }
@@ -248,29 +249,29 @@ where
 }
 
 /// A venue refusal no resubmit can cure: its [`retry_action`] drops the
-/// watch, so the reservation is safe to release.
+/// commitment, so the reservation is safe to release.
 fn is_terminal(fault: &VenueFault) -> bool {
     matches!(retry_action(fault), RetryAction::Drop)
 }
 
-/// One run's tally, by watch disposition.
+/// One run's tally, by commitment disposition.
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]
 pub struct RunReport {
-    /// Watches polled.
+    /// Commitments polled.
     pub polled: usize,
-    /// Watches skipped by an unexpired gate.
+    /// Commitments skipped by an unexpired gate.
     pub gated: usize,
-    /// Watches skipped unread: a malformed key or a vanished row.
+    /// Commitments skipped unread: a malformed key or a vanished row.
     pub skipped: usize,
     /// Bodies the venue accepted, submission key newly journalled.
     pub submitted: usize,
     /// Bodies an earlier run journalled, skipped without a venue call.
     pub duplicates: usize,
-    /// Watches left in place for a later tick, plus submit arms the
+    /// Commitments left in place for a later tick, plus submit arms the
     /// reconcile pass already owns this tick.
     pub retried: usize,
-    /// Watches dropped.
+    /// Commitments dropped.
     pub dropped: usize,
     /// Stranded reservations the reconcile pass committed this tick.
     pub reconciled_committed: usize,
@@ -284,7 +285,7 @@ pub struct RunReport {
     /// txs ride [`unsigned`](Self::unsigned).
     pub reconciled_unsigned: usize,
     /// Transactions the venue answered `requires-signing`; a run cannot
-    /// sign, so the caller owns them. Fresh-watch and reconcile answers.
+    /// sign, so the caller owns them. Fresh-commitment and reconcile answers.
     pub unsigned: Vec<UnsignedTx>,
 }
 
@@ -315,7 +316,7 @@ pub fn submission_key(venue: &VenueId, body: &[u8]) -> String {
 
 /// Fold a venue refusal into a retry action: a throttle hint becomes an
 /// epoch gate, transient failures retry next block, and refusals no retry
-/// can cure drop the watch.
+/// can cure drop the commitment.
 pub fn retry_action(fault: &VenueFault) -> RetryAction {
     match fault {
         VenueFault::RateLimited {
@@ -342,8 +343,10 @@ mod tests {
     use std::cell::{Cell, RefCell};
     use std::collections::HashSet;
 
-    use nexum_sdk::host::{Fault, LocalStoreHost as _};
-    use nexum_sdk::keeper::{Disposition, Gates, Guarded, Journal, Mark, Tick, WatchRef, WatchSet};
+    use nexum_sdk::host::{EntryPage, Fault, ListQuery, LocalStoreHost as _};
+    use nexum_sdk::keeper::{
+        CommitmentRef, CommitmentSet, Disposition, Gates, Guarded, Journal, Mark, Tick,
+    };
     use nexum_sdk::prelude::{Address, B256, hex, keccak256};
     use nexum_sdk_test::{MockLocalStore, TrapStore};
 
@@ -368,7 +371,13 @@ mod tests {
     impl<H> nexum_sdk::keeper::Poller<H> for StubSource {
         type Outcome = Outcome;
 
-        fn poll(&self, _host: &H, _watch: WatchRef<'_>, _params: &[u8], _tick: &Tick) -> Outcome {
+        fn poll(
+            &self,
+            _host: &H,
+            _commitment: CommitmentRef<'_>,
+            _params: &[u8],
+            _tick: &Tick,
+        ) -> Outcome {
             self.0.clone()
         }
     }
@@ -379,7 +388,13 @@ mod tests {
     impl<H> nexum_sdk::keeper::Poller<H> for SeqSource {
         type Outcome = Outcome;
 
-        fn poll(&self, _host: &H, _watch: WatchRef<'_>, _params: &[u8], _tick: &Tick) -> Outcome {
+        fn poll(
+            &self,
+            _host: &H,
+            _commitment: CommitmentRef<'_>,
+            _params: &[u8],
+            _tick: &Tick,
+        ) -> Outcome {
             self.0.borrow_mut().pop().unwrap_or(Outcome::WaitBlock)
         }
     }
@@ -434,10 +449,10 @@ mod tests {
         epoch_s: 1_000,
     };
 
-    fn put_watch(host: &MockLocalStore) -> String {
-        WatchSet::new(host)
+    fn put_commitment(host: &MockLocalStore) -> String {
+        CommitmentSet::new(host)
             .put(&Address::ZERO, &B256::ZERO, b"params")
-            .expect("mock store accepts the watch")
+            .expect("mock store accepts the commitment")
     }
 
     fn keeper(outcome: Outcome, venue: &StubVenue) -> Keeper<StubSource, &StubVenue> {
@@ -447,7 +462,7 @@ mod tests {
     #[test]
     fn accepted_body_is_journalled_and_never_resubmitted() {
         let host = MockLocalStore::default();
-        put_watch(&host);
+        put_commitment(&host);
         let venue = StubVenue::new(Ok(SubmitOutcome::Accepted(vec![0xA5, 0x5A])));
         let keeper = keeper(Outcome::Submit(b"body".to_vec()), &venue);
 
@@ -459,9 +474,12 @@ mod tests {
         let journal = Journal::submitted(&host);
         let key = format!("stub:{}", hex::encode_prefixed(keccak256(b"body")));
         assert!(journal.contains(&key).expect("journal reads"));
-        assert_eq!(WatchSet::new(&host).list().expect("list reads").len(), 1);
+        assert_eq!(
+            CommitmentSet::new(&host).list().expect("list reads").len(),
+            1
+        );
 
-        // A later run re-polls the watch but never re-posts the body.
+        // A later run re-polls the commitment but never re-posts the body.
         let report = run(keeper.run(&host, &TICK)).expect("keeper runs");
         assert_eq!(report.submitted, 0);
         assert_eq!(report.duplicates, 1);
@@ -471,9 +489,9 @@ mod tests {
     #[test]
     fn accepted_body_clears_the_refusal_marker() {
         let host = MockLocalStore::default();
-        let key = put_watch(&host);
-        let watch = WatchRef::parse(&key).expect("well-formed key");
-        host.set(&watch.refused_key(), &50_u64.to_le_bytes())
+        let key = put_commitment(&host);
+        let commitment = CommitmentRef::parse(&key).expect("well-formed key");
+        host.set(&commitment.refused_key(), &50_u64.to_le_bytes())
             .expect("marker writes");
         let venue = StubVenue::new(Ok(SubmitOutcome::Accepted(vec![1])));
 
@@ -481,7 +499,7 @@ mod tests {
             .expect("keeper runs");
         assert_eq!(report.submitted, 1);
         assert!(
-            host.get(&watch.refused_key())
+            host.get(&commitment.refused_key())
                 .expect("marker reads")
                 .is_none(),
             "acceptance must clear the first-refusal marker",
@@ -491,8 +509,8 @@ mod tests {
     #[test]
     fn refusal_marker_clear_fault_does_not_abort_a_journalled_acceptance() {
         let host = MockLocalStore::default();
-        put_watch(&host);
-        host.fail_on("refused:", Fault::Unavailable("store down".into()));
+        put_commitment(&host);
+        host.fail_on("refused:", Fault::unavailable("store down"));
         let venue = StubVenue::new(Ok(SubmitOutcome::Accepted(vec![1])));
 
         let report = run(keeper(Outcome::Submit(b"body".to_vec()), &venue).run(&host, &TICK))
@@ -510,7 +528,7 @@ mod tests {
     #[test]
     fn a_changed_body_submits_afresh() {
         let host = MockLocalStore::default();
-        put_watch(&host);
+        put_commitment(&host);
         let venue = StubVenue::new(Ok(SubmitOutcome::Accepted(vec![1])));
         // Polls pop from the back: `one` first, then `two`.
         let source = SeqSource(RefCell::new(vec![
@@ -540,7 +558,7 @@ mod tests {
     #[test]
     fn requires_signing_hands_the_transaction_to_the_caller() {
         let host = MockLocalStore::default();
-        put_watch(&host);
+        put_commitment(&host);
         let tx = UnsignedTx {
             chain: 1,
             to: vec![0x11; 20],
@@ -561,12 +579,12 @@ mod tests {
     }
 
     #[test]
-    fn gated_watch_is_not_polled() {
+    fn gated_commitment_is_not_polled() {
         let host = MockLocalStore::default();
-        let key = put_watch(&host);
-        let watch = WatchRef::parse(&key).expect("well-formed key");
+        let key = put_commitment(&host);
+        let commitment = CommitmentRef::parse(&key).expect("well-formed key");
         Gates::new(&host)
-            .set_next_block(watch, TICK.block + 1)
+            .set_next_block(commitment, TICK.block + 1)
             .expect("gate writes");
         let venue = StubVenue::new(Ok(SubmitOutcome::Accepted(vec![1])));
 
@@ -578,20 +596,25 @@ mod tests {
     }
 
     #[test]
-    fn drop_outcome_removes_the_watch() {
+    fn drop_outcome_removes_the_commitment() {
         let host = MockLocalStore::default();
-        put_watch(&host);
+        put_commitment(&host);
         let venue = StubVenue::new(Ok(SubmitOutcome::Accepted(vec![1])));
 
         let report = run(keeper(Outcome::Drop, &venue).run(&host, &TICK)).expect("keeper runs");
         assert_eq!(report.dropped, 1);
-        assert!(WatchSet::new(&host).list().expect("list reads").is_empty());
+        assert!(
+            CommitmentSet::new(&host)
+                .list()
+                .expect("list reads")
+                .is_empty()
+        );
     }
 
     #[test]
-    fn backoff_outcome_gates_the_watch_on_the_epoch_clock() {
+    fn backoff_outcome_gates_the_commitment_on_the_epoch_clock() {
         let host = MockLocalStore::default();
-        put_watch(&host);
+        put_commitment(&host);
         let venue = StubVenue::new(Ok(SubmitOutcome::Accepted(vec![1])));
         let keeper = keeper(Outcome::Backoff { seconds: 30 }, &venue);
 
@@ -614,7 +637,7 @@ mod tests {
     #[test]
     fn rate_limited_refusal_backs_off_by_the_venue_hint() {
         let host = MockLocalStore::default();
-        put_watch(&host);
+        put_commitment(&host);
         let venue = StubVenue::new(Err(VenueFault::RateLimited {
             retry_after_ms: Some(2_500),
         }));
@@ -643,21 +666,26 @@ mod tests {
     }
 
     #[test]
-    fn non_retryable_refusal_drops_the_watch() {
+    fn non_retryable_refusal_drops_the_commitment() {
         let host = MockLocalStore::default();
-        put_watch(&host);
+        put_commitment(&host);
         let venue = StubVenue::new(Err(VenueFault::Denied("blocked".into())));
 
         let report = run(keeper(Outcome::Submit(b"body".to_vec()), &venue).run(&host, &TICK))
             .expect("keeper runs");
         assert_eq!(report.dropped, 1);
-        assert!(WatchSet::new(&host).list().expect("list reads").is_empty());
+        assert!(
+            CommitmentSet::new(&host)
+                .list()
+                .expect("list reads")
+                .is_empty()
+        );
     }
 
     #[test]
-    fn transient_refusal_leaves_the_watch_for_the_next_tick() {
+    fn transient_refusal_leaves_the_commitment_for_the_next_tick() {
         let host = MockLocalStore::default();
-        put_watch(&host);
+        put_commitment(&host);
         let venue = StubVenue::new(Err(VenueFault::Unavailable("down".into())));
         let keeper = keeper(Outcome::Submit(b"body".to_vec()), &venue);
 
@@ -670,7 +698,7 @@ mod tests {
     }
 
     #[test]
-    fn empty_watch_set_reports_nothing() {
+    fn empty_commitment_set_reports_nothing() {
         let host = MockLocalStore::default();
         let venue = StubVenue::new(Ok(SubmitOutcome::Accepted(vec![1])));
 
@@ -793,7 +821,7 @@ mod tests {
             // 0x02 is the journal COMMITTED tag.
             if self.arm.get() && key.starts_with("submitted:") && value.first() == Some(&0x02) {
                 self.arm.set(false);
-                return Err(Fault::Unavailable("commit write faulted".into()));
+                return Err(Fault::unavailable("commit write faulted"));
             }
             self.inner.set(key, value)
         }
@@ -804,6 +832,10 @@ mod tests {
 
         fn list_keys(&self, prefix: &str) -> Result<Vec<String>, Fault> {
             self.inner.list_keys(prefix)
+        }
+
+        fn list_entries(&self, query: &ListQuery<'_>) -> Result<EntryPage, Fault> {
+            self.inner.list_entries(query)
         }
 
         fn contains(&self, key: &str) -> Result<bool, Fault> {
@@ -834,7 +866,7 @@ mod tests {
     #[test]
     fn reserve_commit_happy_path_then_idempotent_skip() {
         let host = MockLocalStore::default();
-        put_watch(&host);
+        put_commitment(&host);
         let venue = CountingVenue::accepting();
         let keeper = Keeper::new(StubSource(Outcome::Submit(b"body".to_vec())), &venue, STUB);
 
@@ -868,9 +900,9 @@ mod tests {
     #[test]
     fn w2_accepted_but_commit_faults_reconciles_without_double_holding() {
         let host = FlakyCommit::new();
-        WatchSet::new(&host)
+        CommitmentSet::new(&host)
             .put(&Address::ZERO, &B256::ZERO, b"params")
-            .expect("watch writes");
+            .expect("commitment writes");
         let venue = CountingVenue::accepting();
         let keeper = Keeper::new(StubSource(Outcome::Submit(b"order".to_vec())), &venue, STUB);
 
@@ -998,17 +1030,17 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_budget_bounds_the_pass_but_not_the_fresh_watch() {
+    fn reconcile_budget_bounds_the_pass_but_not_the_fresh_commitment() {
         let host = MockLocalStore::default();
         for body in [b"o1".as_slice(), b"o2", b"o3"] {
             seed_reserved(&host, body);
         }
-        put_watch(&host);
+        put_commitment(&host);
         let venue = CountingVenue::accepting();
         let keeper = Keeper::new(StubSource(Outcome::Submit(b"fresh".to_vec())), &venue, STUB)
             .with_reconcile_budget(2);
 
-        // At most two orphans reconciled, yet the fresh watch still
+        // At most two orphans reconciled, yet the fresh commitment still
         // submits its own order this tick.
         let report = run(keeper.run(&host, &TICK)).expect("keeper runs");
         assert_eq!(report.reconciled_committed, 2);
@@ -1018,6 +1050,24 @@ mod tests {
         // The remaining orphan reconciles on a later tick.
         let report = run(keeper.run(&host, &TICK)).expect("keeper runs");
         assert_eq!(report.reconciled_committed, 1);
+        assert!(Journal::submitted(&host).pending().unwrap().is_empty());
+    }
+
+    #[test]
+    fn reconcile_resumes_across_journal_pages() {
+        // One entry per page, so `Journal::pending` must follow its
+        // resume cursor to see every stranded reservation. The real host
+        // caps a page; an uncapped mock would hide a missing resume.
+        let host = MockLocalStore::default();
+        host.set_max_page(1);
+        for body in [b"o1".as_slice(), b"o2", b"o3"] {
+            seed_reserved(&host, body);
+        }
+        let venue = CountingVenue::accepting();
+
+        let report = run(idle_keeper(&venue).run(&host, &TICK)).expect("keeper runs");
+        assert_eq!(report.reconciled_committed, 3, "every page must be walked");
+        assert_eq!(venue.post_count(), 3);
         assert!(Journal::submitted(&host).pending().unwrap().is_empty());
     }
 
@@ -1039,9 +1089,9 @@ mod tests {
     #[test]
     fn anti_572_crash_between_submit_and_commit_leaves_reserved_not_none() {
         let host = FlakyCommit::new();
-        WatchSet::new(&host)
+        CommitmentSet::new(&host)
             .put(&Address::ZERO, &B256::ZERO, b"params")
-            .expect("watch writes");
+            .expect("commitment writes");
         let venue = CountingVenue::accepting();
         let keeper = Keeper::new(StubSource(Outcome::Submit(b"order".to_vec())), &venue, STUB);
 
@@ -1060,7 +1110,7 @@ mod tests {
     // states - nothing, RESERVED, COMMITTED-sans-marker-clear - is one
     // the next sweep's reconcile pass resolves on its own.
 
-    /// Seed one watch on a trap store and pair it with an accepting
+    /// Seed one commitment on a trap store and pair it with an accepting
     /// venue and a submitting keeper.
     fn trap_rig(
         venue: &CountingVenue,
@@ -1069,9 +1119,9 @@ mod tests {
         Keeper<StubSource, &CountingVenue>,
     ) {
         let host = TrapStore::new(MockLocalStore::default());
-        WatchSet::new(&host)
+        CommitmentSet::new(&host)
             .put(&Address::ZERO, &B256::ZERO, b"params")
-            .expect("watch writes");
+            .expect("commitment writes");
         let keeper = Keeper::new(StubSource(Outcome::Submit(b"order".to_vec())), venue, STUB);
         (host, keeper)
     }
@@ -1102,7 +1152,7 @@ mod tests {
             assert!(host.tripped(), "prefix {n}: the trap must fire mid-tick");
 
             // Restart from the torn store: the next sweep's reconcile
-            // pass plus the fresh-watch loop must converge.
+            // pass plus the fresh-commitment loop must converge.
             host.disarm();
             run(keeper.run(&host, &TICK)).expect("recovery tick runs");
             assert_eq!(
