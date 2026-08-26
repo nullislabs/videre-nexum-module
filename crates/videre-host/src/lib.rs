@@ -33,8 +33,8 @@ use wasmtime::component::{HasSelf, Linker};
 
 pub use policy::{Liveness, SubmitQuota, WatchLimit};
 pub use registry::{
-    DuplicateVenue, EgressGuard, GuardContext, GuardVerdict, IntentStatusUpdate, VenueId,
-    VenueInvoker, VenueRegistry, VenueRegistryBuilder,
+    DuplicateVenue, EgressGuard, GuardContext, GuardVerdict, IntentStatusUpdate, InvalidVenueId,
+    VenueId, VenueInvoker, VenueRegistry, VenueRegistryBuilder,
 };
 
 /// Status-poll channel buffer.

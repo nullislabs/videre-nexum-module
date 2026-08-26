@@ -5616,6 +5616,7 @@ name = "videre-host"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "derive_more",
  "futures",
  "nexum-runtime",
  "nexum-tasks",

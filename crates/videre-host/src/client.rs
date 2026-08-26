@@ -29,35 +29,32 @@ pub(crate) fn publish_registry(registry: Arc<VenueRegistry>) {
     let _ = REGISTRY.set(registry);
 }
 
-/// Drop the published registry. Test-only: `OnceLock` has no stable reset,
-/// so this is a no-op placeholder that documents the constraint. Tests
-/// wanting registry isolation should exercise [`VenueRegistry`] directly
-/// rather than through the glue.
-#[cfg(test)]
-pub(crate) fn published() -> Option<&'static Arc<VenueRegistry>> {
-    REGISTRY.get()
-}
-
 /// The registry published for this process.
 fn registry() -> Result<&'static Arc<VenueRegistry>, VenueError> {
     REGISTRY.get().ok_or(VenueError::UnknownVenue)
 }
 
+/// Validate the wire venue id at the host import. A blank id can never be
+/// installed, so it is `unknown-venue`, not a resolvable venue.
+fn venue_id(venue: String) -> Result<VenueId, VenueError> {
+    VenueId::new(venue).map_err(|_| VenueError::UnknownVenue)
+}
+
 impl<T: RuntimeTypes> Host for HostState<T> {
     async fn quote(&mut self, venue: String, body: Vec<u8>) -> Result<Quotation, VenueError> {
         registry()?
-            .quote(self.run.module.as_str(), &VenueId::from(venue), body)
+            .quote(self.run.module.as_str(), &venue_id(venue)?, body)
             .await
     }
 
     async fn submit(&mut self, venue: String, body: Vec<u8>) -> Result<SubmitOutcome, VenueError> {
         registry()?
-            .submit(self.run.module.as_str(), &VenueId::from(venue), body)
+            .submit(self.run.module.as_str(), &venue_id(venue)?, body)
             .await
     }
 
     async fn observe(&mut self, venue: String, receipt: Vec<u8>) -> Result<(), VenueError> {
-        registry()?.observe(&VenueId::from(venue), receipt)
+        registry()?.observe(&venue_id(venue)?, receipt)
     }
 
     async fn status(
@@ -65,10 +62,31 @@ impl<T: RuntimeTypes> Host for HostState<T> {
         venue: String,
         receipt: Vec<u8>,
     ) -> Result<IntentStatus, VenueError> {
-        registry()?.status(&VenueId::from(venue), receipt).await
+        registry()?.status(&venue_id(venue)?, receipt).await
     }
 
     async fn cancel(&mut self, venue: String, receipt: Vec<u8>) -> Result<(), VenueError> {
-        registry()?.cancel(&VenueId::from(venue), receipt).await
+        registry()?.cancel(&venue_id(venue)?, receipt).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The seam every `Host` method routes the wire venue id through. The
+    /// `VenueId` field is private to `registry`, so no method here can
+    /// build one that skipped this check.
+    #[test]
+    fn a_blank_wire_venue_id_is_unknown_venue() {
+        assert!(matches!(
+            venue_id(String::new()),
+            Err(VenueError::UnknownVenue)
+        ));
+        assert!(matches!(
+            venue_id("  ".to_owned()),
+            Err(VenueError::UnknownVenue)
+        ));
+        assert_eq!(venue_id("cow".to_owned()).expect("parses").as_str(), "cow");
     }
 }
