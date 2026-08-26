@@ -1,5 +1,5 @@
 # Extension capability registry for this composition root: the
-# per-namespace rows the component world synthesis emits beyond the core
+# per-namespace rows the module world synthesis emits beyond the core
 # nexum:host table. `nexum_world::manifest_extensions` reads this file.
 # Each table key is a name a component declares in its `[dependencies]`
 # table. Each row names the WIT import that declaration turns into, and

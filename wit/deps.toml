@@ -12,8 +12,9 @@
 # update`, and record the real digests when the source is next
 # refreshed.
 #
-# The vendored wit/deps/nexum-host tree was compared byte for byte
-# against wit/nexum-host at rev fd16db7 and it is identical.
+# The vendored wit/deps/nexum-host tree matches wit/nexum-host at the
+# rev above, byte for byte. Compare the two trees after you change
+# either one.
 [nexum-host]
 url = "https://github.com/nullislabs/nexum-runtime/archive/fd16db7709f01bf06116d98053a894de4b1f4adf.tar.gz"
 sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
