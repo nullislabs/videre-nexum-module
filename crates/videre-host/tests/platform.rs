@@ -1,185 +1,40 @@
-//! E2E coverage for the videre platform over the generic runtime seam: the
-//! venue-adapter provider boot, the client -> registry -> adapter round
-//! trip, the status-poll event source, and the trap-to-recovery sweeps.
-//! Skips gracefully when a wasm artefact is absent.
+//! Coverage for the videre platform over the generic runtime seam: the
+//! native venue round trip through [`VenueRegistry`], the body-version
+//! handshake the extension gates a keeper on, the routing policy, the
+//! status-poll source, and the client-import linker hook.
+//!
+//! A venue is a native Rust [`VenueInvoker`], so none of this needs a guest
+//! component: the platform is driven through its own public seam.
 
-use std::collections::VecDeque;
-use std::path::{Path, PathBuf};
+use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use futures::StreamExt;
 use futures::future::BoxFuture;
-use nexum_runtime::bindings::nexum;
-use nexum_runtime::engine_config::{
-    AdapterEntry, EngineConfig, ModuleEntry, ModuleLimits, PoisonLimitsSection,
-};
-use nexum_runtime::host::component::ChainMethod;
-use nexum_runtime::host::extension::{EventSources, Extension, ExtensionEvent, ProviderManifest};
-use nexum_runtime::host::state::HostState;
-use nexum_runtime::manifest::{CapabilityRegistry, ExtensionSections, NamespaceCaps};
-use nexum_runtime::supervisor::{Supervisor, build_linker, build_provider_linker};
-use nexum_runtime::test_utils::{MockChainProvider, MockStateStore, MockTypes, mock_components};
+use nexum_runtime::bindings::nexum::host::types::Trigger;
+use nexum_runtime::config::EngineConfig;
+use nexum_runtime::extension::{Extension, HostState, SourceContext};
+use nexum_runtime::manifest::ExtensionSections;
+use nexum_runtime::nexum_tasks::{TaskManager, TaskSet};
+use nexum_runtime::test_utils::{MockTypes, test_wasmtime_engine};
 use videre_host::bindings::{
-    IntentHeader, IntentStatus, Quotation, Settlement, SubmitOutcome, VenueError, value_flow,
+    AuthScheme, IntentHeader, IntentStatus, Quotation, Settlement, SubmitOutcome, VenueError,
+    value_flow,
 };
 use videre_host::{
-    VenueAdapterKind, VenueId, VenueInvoker, VenueRegistry, VenueRegistryBuilder, Videre, platform,
+    Liveness, SubmitQuota, VenueId, VenueInvoker, VenueRegistry, VenueRegistryBuilder, Videre,
+    WatchLimit, platform,
 };
+use videre_status_body::{INTENT_STATUS_KIND, IntentStatusUpdate, StatusBody};
 use wasmtime::component::Linker;
 
-/// The subscription kind the platform's status poller emits.
-const INTENT_STATUS: &str = "intent-status";
+// ── fixtures ──────────────────────────────────────────────────────────
 
-// ── fixtures + assembly ───────────────────────────────────────────────
-
-/// Path under the workspace root (the topmost ancestor with a `Cargo.toml`).
-fn workspace_path(relative: &str) -> PathBuf {
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    manifest
-        .ancestors()
-        .filter(|d| d.join("Cargo.toml").is_file())
-        .last()
-        .unwrap_or(manifest)
-        .join(relative)
-}
-
-/// A test venue id, parsed through the validating boundary.
-fn venue(id: &str) -> VenueId {
-    id.parse().expect("valid venue id")
-}
-
-/// Path to a module's `.wasm` artefact under the workspace target dir,
-/// or `None` with a skip message when it is not built.
-fn module_wasm_or_skip(module_name: &str) -> Option<PathBuf> {
-    let artifact = module_name.replace('-', "_");
-    let p = workspace_path(&format!("target/wasm32-wasip2/release/{artifact}.wasm"));
-    if p.exists() {
-        Some(p)
-    } else {
-        eprintln!(
-            "SKIP: {} not found - build with `cargo build -p {module_name} --target wasm32-wasip2 --release`",
-            p.display()
-        );
-        None
-    }
-}
-
-fn make_wasmtime_engine() -> wasmtime::Engine {
-    let mut config = wasmtime::Config::new();
-    config.wasm_component_model(true);
-    config.consume_fuel(true);
-    wasmtime::Engine::new(&config).expect("wasmtime engine")
-}
-
-/// The platform's extension slice, keeping the concrete handle for
-/// event-source calls.
-fn videre_assembly(videre: &Arc<Videre>) -> Vec<Arc<dyn Extension<MockTypes>>> {
-    vec![Arc::clone(videre) as Arc<dyn Extension<MockTypes>>]
-}
-
-fn make_linker(
-    engine: &wasmtime::Engine,
-    extensions: &[Arc<dyn Extension<MockTypes>>],
-) -> Linker<HostState<MockTypes>> {
-    build_linker::<MockTypes>(engine, extensions).expect("build_linker")
-}
-
-/// The registry the booted supervisor publishes.
-fn registry_of(supervisor: &Supervisor<MockTypes>) -> Arc<VenueRegistry> {
-    supervisor
-        .services()
-        .get::<VenueRegistry>(VenueRegistry::NAMESPACE)
-        .expect("registry service")
-}
-
-/// A test block that drives dispatch and the dispatch-time sweeps.
-fn block(chain_id: u64) -> nexum::host::types::Block {
-    nexum::host::types::Block {
-        chain_id,
-        number: 19_000_000,
-        hash: vec![0xab; 32],
-        timestamp: 1_700_000_000_000,
-    }
-}
-
-/// Wrap a polled transition as the extension event the platform emits.
-fn status_event(update: videre_host::IntentStatusUpdate) -> ExtensionEvent {
-    let attrs = vec![("venue", update.venue.clone())];
-    let payload = update.encode().expect("encode intent-status envelope");
-    ExtensionEvent {
-        kind: INTENT_STATUS,
-        attrs,
-        event: nexum::host::types::Event::Custom(nexum::host::types::CustomEvent {
-            kind: INTENT_STATUS.to_owned(),
-            payload,
-        }),
-    }
-}
-
-// ── world contract ────────────────────────────────────────────────────
-
-/// An adapter built through `#[videre_sdk::venue]` imports exactly the
-/// scoped transport its manifest declares (`chain`).
-#[test]
-fn e2e_echo_venue_component_imports_equal_declared_capabilities() {
-    let Some(wasm) = module_wasm_or_skip("echo-venue") else {
-        return;
-    };
-    let engine = make_wasmtime_engine();
-    let component = wasmtime::component::Component::from_file(&engine, &wasm).expect("compile");
-    let imports: Vec<String> = component
-        .component_type()
-        .imports(&engine)
-        .map(|(name, _)| name.to_owned())
-        .collect();
-
-    // Capability-bearing imports resolve to exactly the declared set.
-    let registry = CapabilityRegistry::core();
-    let caps: std::collections::BTreeSet<&str> = imports
-        .iter()
-        .filter_map(|name| registry.wit_import_to_cap(name))
-        .collect();
-    assert_eq!(
-        caps,
-        std::collections::BTreeSet::from(["chain"]),
-        "imports were: {imports:?}"
-    );
-
-    // No host key-material or persistence interface leaks in: an adapter
-    // structurally cannot reach messaging it never declared, local-store,
-    // identity, or logging.
-    assert!(
-        imports.iter().all(|name| !name.contains("messaging")
-            && !name.contains("local-store")
-            && !name.contains("identity")
-            && !name.contains("logging")),
-        "imports were: {imports:?}"
-    );
-}
-
-/// The venue-adapter provider linker binds only the scoped transport and
-/// withholds the core-only interfaces, without a duplicate-definition clash.
-#[tokio::test]
-async fn provider_linker_assembles_with_scoped_transport() {
-    let engine = make_wasmtime_engine();
-    build_provider_linker::<MockTypes>(&engine, &VenueAdapterKind)
-        .expect("provider linker assembles");
-}
-
-// ── intent-status subscription E2E ────────────────────────────────────
-
-/// Scripted registry adapter: accepts every submission with a fixed receipt
-/// and serves statuses front-first; once drained, reports `open`.
-struct ScriptedAdapter {
-    statuses: VecDeque<IntentStatus>,
-}
-
-impl ScriptedAdapter {
-    fn new(statuses: impl IntoIterator<Item = IntentStatus>) -> Self {
-        Self {
-            statuses: statuses.into_iter().collect(),
-        }
-    }
+/// The venue id the tests register their adapter under.
+fn cow() -> VenueId {
+    VenueId::new("cow").expect("valid venue id")
 }
 
 fn native(bytes: Vec<u8>) -> value_flow::AssetAmount {
@@ -189,37 +44,64 @@ fn native(bytes: Vec<u8>) -> value_flow::AssetAmount {
     }
 }
 
-impl VenueInvoker for ScriptedAdapter {
+fn header() -> IntentHeader {
+    IntentHeader {
+        gives: native(vec![1]),
+        wants: native(Vec::new()),
+        settlement: Settlement { chain: 1 },
+        authorisation: AuthScheme::Eip712,
+    }
+}
+
+fn quotation() -> Quotation {
+    Quotation {
+        gives: native(vec![1]),
+        wants: native(Vec::new()),
+        fee: native(Vec::new()),
+        valid_until_ms: 1_700_000_000_000,
+    }
+}
+
+/// A native venue: it accepts every submission with the body as the
+/// receipt and serves scripted statuses front-first. Once the script
+/// drains, every further poll reports `open`. `cancelled` is shared with
+/// the test, which the registry hands no handle on the venue back.
+struct ScriptedVenue {
+    statuses: VecDeque<IntentStatus>,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl ScriptedVenue {
+    fn new(statuses: impl IntoIterator<Item = IntentStatus>) -> Self {
+        Self {
+            statuses: statuses.into_iter().collect(),
+            cancelled: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// The flag this venue sets when its `cancel` runs.
+    fn cancelled(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.cancelled)
+    }
+}
+
+impl VenueInvoker for ScriptedVenue {
     fn derive_header<'a>(
         &'a mut self,
         _body: &'a [u8],
     ) -> BoxFuture<'a, Result<IntentHeader, VenueError>> {
-        Box::pin(async move {
-            Ok(IntentHeader {
-                gives: native(vec![1]),
-                wants: native(Vec::new()),
-                settlement: Settlement { chain: 1 },
-                authorisation: videre_host::bindings::AuthScheme::Eip712,
-            })
-        })
+        Box::pin(async move { Ok(header()) })
     }
 
     fn quote<'a>(&'a mut self, _body: &'a [u8]) -> BoxFuture<'a, Result<Quotation, VenueError>> {
-        Box::pin(async move {
-            Ok(Quotation {
-                gives: native(vec![1]),
-                wants: native(Vec::new()),
-                fee: native(Vec::new()),
-                valid_until_ms: 1_700_000_000_000,
-            })
-        })
+        Box::pin(async move { Ok(quotation()) })
     }
 
     fn submit<'a>(
         &'a mut self,
-        _body: &'a [u8],
+        body: &'a [u8],
     ) -> BoxFuture<'a, Result<SubmitOutcome, VenueError>> {
-        Box::pin(async move { Ok(SubmitOutcome::Accepted(b"receipt".to_vec())) })
+        Box::pin(async move { Ok(SubmitOutcome::Accepted(body.to_vec())) })
     }
 
     fn status(&mut self, _receipt: Vec<u8>) -> BoxFuture<'_, Result<IntentStatus, VenueError>> {
@@ -227,887 +109,343 @@ impl VenueInvoker for ScriptedAdapter {
     }
 
     fn cancel(&mut self, _receipt: Vec<u8>) -> BoxFuture<'_, Result<(), VenueError>> {
-        Box::pin(async move { Ok(()) })
+        Box::pin(async move {
+            self.cancelled.store(true, Ordering::SeqCst);
+            Ok(())
+        })
     }
 }
 
-/// A registry with one scripted adapter installed under `cow`.
-fn scripted_registry(adapter: ScriptedAdapter) -> VenueRegistry {
-    let registry = VenueRegistryBuilder::new(Default::default()).build();
+/// A registry with one scripted venue registered under `cow`, declaring
+/// `versions` as the body-schema set it decodes.
+fn registry_with(venue: ScriptedVenue, versions: impl IntoIterator<Item = u32>) -> VenueRegistry {
+    let registry = VenueRegistryBuilder::new(SubmitQuota::default()).build();
     registry
-        .install_for_test(
-            venue("cow"),
-            nexum_runtime::host::actor::Liveness::default(),
-            adapter,
+        .register(
+            cow(),
+            Liveness::new(),
+            versions.into_iter().collect(),
+            venue,
         )
-        .expect("install scripted adapter");
+        .expect("register the scripted venue");
     registry
 }
 
-/// Write a manifest subscribing the example module to intent-status
-/// events from the `cow` venue.
-fn echo_client_status_manifest(dir: &Path) -> PathBuf {
-    let manifest = dir.join("module.toml");
-    std::fs::write(
-        &manifest,
-        r#"
-[module]
-name = "echo-client"
-
-[capabilities]
-required = ["client", "logging"]
-
-[[subscription]]
-kind  = "intent-status"
-venue = "cow"
-"#,
-    )
-    .expect("write manifest");
-    manifest
+/// One `[venue]` manifest section, as the loader hands it to the extension.
+fn sections(toml: &str) -> ExtensionSections {
+    let table: toml::Table = toml.parse().expect("parse the [venue] section");
+    table.into_iter().collect()
 }
 
-fn intent_status_manifest(dir: &Path) -> PathBuf {
-    let manifest = dir.join("module.toml");
-    std::fs::write(
-        &manifest,
-        r#"
-[module]
-name = "example"
+// ── the native venue round trip ───────────────────────────────────────
 
-[capabilities]
-required = ["logging"]
-
-[[subscription]]
-kind  = "intent-status"
-venue = "cow"
-"#,
-    )
-    .expect("write manifest");
-    manifest
-}
-
-/// Boot the example module against the given videre platform.
-async fn boot_example(videre: &Arc<Videre>, wasm: &Path, manifest: &Path) -> Supervisor<MockTypes> {
-    let engine = make_wasmtime_engine();
-    let extensions = videre_assembly(videre);
-    let linker = make_linker(&engine, &extensions);
-    let components = mock_components();
-    let limits = ModuleLimits::default();
-    Supervisor::boot_single(
-        &engine,
-        &linker,
-        wasm,
-        Some(manifest),
-        &components,
-        &limits,
-        &extensions,
-        None,
-    )
-    .await
-    .expect("boot_single")
-}
-
-/// A module subscribed to `intent-status` receives the polled transitions;
-/// a transition outside its venue filter is not delivered.
+/// Every verb of the keeper-facing seam reaches the registered venue, and
+/// an accepted receipt goes under status watch.
 #[tokio::test]
-async fn e2e_intent_status_subscription_receives_polled_transitions() {
-    let Some(wasm) = module_wasm_or_skip("example") else {
-        return;
-    };
-    let dir = tempfile::tempdir().expect("tempdir");
-    let manifest = intent_status_manifest(dir.path());
+async fn every_verb_reaches_the_registered_native_venue() {
+    // A scripted `pending` so the status leg pins the venue's own answer
+    // rather than the drained-script fallback.
+    let venue = ScriptedVenue::new([IntentStatus::Pending]);
+    let cancelled = venue.cancelled();
+    let registry = registry_with(venue, [1]);
 
-    let registry = scripted_registry(ScriptedAdapter::new([
-        IntentStatus::Pending,
-        IntentStatus::Fulfilled,
-    ]));
-    let videre = Arc::new(Videre::from_registry(registry.clone()));
-    let mut supervisor = boot_example(&videre, &wasm, &manifest).await;
-    assert!(
-        supervisor
-            .extension_subscription_kinds()
-            .contains(INTENT_STATUS)
-    );
+    let quoted = registry
+        .quote("mod-a", &cow(), b"body".to_vec())
+        .await
+        .expect("quote succeeds");
+    assert_eq!(quoted, quotation());
 
-    // The registry watches the receipt of an accepted submission and polls
-    // the adapter's status export; each poll here observes a transition.
+    let outcome = registry
+        .submit("mod-a", &cow(), b"body".to_vec())
+        .await
+        .expect("submit succeeds");
+    assert!(matches!(outcome, SubmitOutcome::Accepted(r) if r == b"body"));
+    assert_eq!(registry.watched_count(), 1, "the receipt is watched");
+
+    // An externally obtained receipt joins the watch without a submission.
     registry
-        .submit("test-caller", &venue("cow"), b"body".to_vec())
-        .await
-        .expect("submit");
+        .observe(&cow(), b"onchain".to_vec())
+        .expect("observe succeeds");
+    assert_eq!(registry.watched_count(), 2);
 
-    let mut delivered = 0;
-    for _ in 0..2 {
-        for update in registry.poll_status_transitions().await {
-            delivered += supervisor
-                .dispatch_extension_event(status_event(update))
-                .await;
-        }
-    }
-    assert_eq!(delivered, 2, "pending then fulfilled, one subscriber each");
-    assert_eq!(supervisor.alive_count(), 1, "module must remain alive");
-
-    // A venue outside the module's filter is not delivered.
-    let foreign = videre_host::IntentStatusUpdate {
-        venue: "other".to_owned(),
-        receipt: b"receipt".to_vec(),
-        status: videre_status_body::StatusBody {
-            status: videre_status_body::IntentStatus::Open,
-            proof: None,
-            reason: None,
-        }
-        .encode()
-        .expect("encode"),
-    };
-    assert_eq!(
-        supervisor
-            .dispatch_extension_event(status_event(foreign))
-            .await,
-        0
-    );
-}
-
-/// The event-loop wiring through the real seam: the platform's `events`
-/// source opens, its poll task drives the supervisor, and the module's
-/// handler observably ran.
-#[tokio::test]
-async fn e2e_intent_status_flows_through_the_event_loop() {
-    use nexum_tasks::{TaskManager, TaskSet};
-
-    let Some(wasm) = module_wasm_or_skip("echo-client") else {
-        return;
-    };
-    let dir = tempfile::tempdir().expect("tempdir");
-    let manifest = echo_client_status_manifest(dir.path());
-
-    let registry = scripted_registry(ScriptedAdapter::new([]));
-    let videre = Arc::new(Videre::from_registry(registry.clone()));
-
-    let engine = make_wasmtime_engine();
-    let extensions = videre_assembly(&videre);
-    let linker = make_linker(&engine, &extensions);
-    let components = mock_components();
-    let logs = components.logs.clone();
-    let limits = ModuleLimits::default();
-    let mut supervisor = Supervisor::boot_single(
-        &engine,
-        &linker,
-        &wasm,
-        Some(&manifest),
-        &components,
-        &limits,
-        &extensions,
-        None,
-    )
-    .await
-    .expect("boot_single");
-
-    registry
-        .submit("test-caller", &venue("cow"), b"body".to_vec())
-        .await
-        .expect("submit");
-
-    // A fast cadence so the 300 ms window sees the first poll.
-    let mut config = EngineConfig::default();
-    config.limits.status_poll.interval_ms = Some(10);
-
-    let manager = TaskManager::new();
-    let executor = manager.executor();
-    let mut tasks = TaskSet::new();
-    let subscribed = supervisor.extension_subscription_kinds();
-    let streams = {
-        let mut sources = EventSources::new(
-            &config,
-            supervisor.services(),
-            &subscribed,
-            &executor,
-            &mut tasks,
-        );
-        Extension::<MockTypes>::events(&*videre, &mut sources).expect("open event source")
-    };
-    assert_eq!(streams.len(), 1, "one status-poll stream opened");
-
-    nexum_runtime::runtime::event_loop::run(
-        &mut supervisor,
-        Vec::new(),
-        Vec::new(),
-        streams,
-        tasks,
-        tokio::time::sleep(Duration::from_millis(300)),
-    )
-    .await;
-
-    assert_eq!(supervisor.alive_count(), 1, "module must remain alive");
-    let runs = logs.list_runs("echo-client");
-    assert_eq!(runs.len(), 1, "one run recorded for the echo-client module");
-    let page = logs.read(&runs[0].run, 0);
-    assert!(
-        page.records
-            .iter()
-            .any(|r| r.message.contains("intent status from venue cow")),
-        "the module's on_custom handler decoded the transition; records were: {:?}",
-        page.records
-            .iter()
-            .map(|r| r.message.as_str())
-            .collect::<Vec<_>>(),
-    );
-}
-
-/// With no subscriber or no installed venue, the platform opens no event
-/// source.
-#[tokio::test]
-async fn event_source_stays_closed_without_subscribers_or_venues() {
-    use nexum_tasks::{TaskManager, TaskSet};
-
-    let config = EngineConfig::default();
-    let manager = TaskManager::new();
-    let executor = manager.executor();
-    let services = nexum_runtime::host::extension::HostServices::default();
-
-    // A venue is installed but nothing subscribes.
-    let with_venue = Arc::new(Videre::from_registry(scripted_registry(
-        ScriptedAdapter::new([]),
-    )));
-    let empty = std::collections::BTreeSet::new();
-    let mut tasks = TaskSet::new();
-    let mut sources = EventSources::new(&config, &services, &empty, &executor, &mut tasks);
-    let streams = Extension::<MockTypes>::events(&*with_venue, &mut sources).expect("events");
-    assert!(streams.is_empty(), "no subscriber, no stream");
-
-    // A subscriber exists but no venue is installed.
-    let no_venue = Arc::new(platform(&config));
-    let subscribed: std::collections::BTreeSet<String> =
-        std::iter::once(INTENT_STATUS.to_owned()).collect();
-    let mut tasks = TaskSet::new();
-    let mut sources = EventSources::new(&config, &services, &subscribed, &executor, &mut tasks);
-    let streams = Extension::<MockTypes>::events(&*no_venue, &mut sources).expect("events");
-    assert!(streams.is_empty(), "no venue, no stream");
-}
-
-// ── echo round trip ───────────────────────────────────────────────────
-
-/// End to end over two real components: the echo-client module submits
-/// through `videre:venue/client`, the host registry forwards to the
-/// echo-venue adapter, and the module receives the fulfilled
-/// `intent-status` polled back.
-#[tokio::test]
-async fn e2e_echo_module_registry_adapter_round_trip() {
-    let (Some(adapter_wasm), Some(module_wasm)) = (
-        module_wasm_or_skip("echo-venue"),
-        module_wasm_or_skip("echo-client"),
-    ) else {
-        return;
-    };
-
-    // The adapter reads eth_blockNumber on submit to justify its `chain`
-    // grant; program the mock so that read succeeds. The response body is
-    // discarded by the adapter, so any Ok value serves.
-    let chain = MockChainProvider::new();
-    chain.on_method(ChainMethod::EthBlockNumber, "\"0x1\"");
-    let components = nexum_runtime::test_utils::mock_components_from(chain, MockStateStore::new());
-    let logs = components.logs.clone();
-
-    let engine = make_wasmtime_engine();
-    let config = EngineConfig {
-        adapters: vec![AdapterEntry {
-            path: adapter_wasm,
-            manifest: Some(workspace_path("modules/examples/echo-venue/module.toml")),
-            http_allow: Vec::new(),
-            messaging_topics: Vec::new(),
-        }],
-        modules: vec![ModuleEntry {
-            path: module_wasm,
-            manifest: Some(workspace_path("modules/examples/echo-client/module.toml")),
-        }],
-        ..Default::default()
-    };
-    let videre = Arc::new(platform(&config));
-    let extensions = videre_assembly(&videre);
-    let linker = make_linker(&engine, &extensions);
-
-    let mut supervisor =
-        Supervisor::boot(&engine, &linker, &config, &components, &extensions, None)
-            .await
-            .expect("boot");
-    assert_eq!(
-        supervisor.adapter_alive_count(),
-        1,
-        "echo-venue is routable"
-    );
-    assert_eq!(supervisor.alive_count(), 1, "echo-client is alive");
-    assert!(
-        supervisor
-            .extension_subscription_kinds()
-            .contains(INTENT_STATUS)
-    );
-
-    // A block drives the module's on_block, which submits to the echo venue
-    // through the shared registry; the registry watches the accepted receipt.
-    assert_eq!(supervisor.dispatch_block(block(1)).await, 1);
-
-    // Poll the registry the module submitted through and fan its transitions
-    // back to the module. echo-venue settles instantly, so the first poll
-    // reports a terminal status and the watch is pruned.
-    let registry = registry_of(&supervisor);
-    let mut delivered = 0;
-    for _ in 0..2 {
-        for update in registry.poll_status_transitions().await {
-            assert_eq!(update.venue, "echo-venue");
-            let body = videre_status_body::StatusBody::decode(&update.status)
-                .expect("status body decodes");
-            assert_eq!(
-                body.status,
-                videre_status_body::IntentStatus::Fulfilled,
-                "echo settles instantly",
-            );
-            delivered += supervisor
-                .dispatch_extension_event(status_event(update))
-                .await;
-        }
-    }
-    assert_eq!(
-        delivered, 1,
-        "one terminal status delivered to the subscriber"
-    );
-    assert_eq!(supervisor.alive_count(), 1, "module must remain alive");
-
-    // The module observably completed the round trip: it quoted, it
-    // submitted, and it received the settled status from the echo venue.
-    let runs = logs.list_runs("echo-client");
-    assert_eq!(runs.len(), 1, "one run recorded for echo-client");
-    let page = logs.read(&runs[0].run, 0);
-    let messages: Vec<&str> = page.records.iter().map(|r| r.message.as_str()).collect();
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("quoted") && m.contains("echo-venue")),
-        "module quoted through the client face; records were: {messages:?}",
-    );
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("submitted") && m.contains("echo-venue")),
-        "module submitted through the client face; records were: {messages:?}",
-    );
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("intent status from venue echo-venue")),
-        "module received the settled status; records were: {messages:?}",
-    );
-}
-
-/// The keeper path over two real components: the echo-keeper module (built
-/// by `#[videre_sdk::keeper]`) drives the echo-venue adapter through the
-/// typed `VenueClient<EchoVenue>` (quote, submit, status, cancel) and
-/// receives the fulfilled `intent-status` polled back.
-#[tokio::test]
-async fn e2e_keeper_module_drives_the_venue_through_the_typed_client() {
-    let (Some(adapter_wasm), Some(module_wasm)) = (
-        module_wasm_or_skip("echo-venue"),
-        module_wasm_or_skip("echo-keeper"),
-    ) else {
-        return;
-    };
-
-    let chain = MockChainProvider::new();
-    chain.on_method(ChainMethod::EthBlockNumber, "\"0x1\"");
-    let components = nexum_runtime::test_utils::mock_components_from(chain, MockStateStore::new());
-    let logs = components.logs.clone();
-
-    let engine = make_wasmtime_engine();
-    let config = EngineConfig {
-        adapters: vec![AdapterEntry {
-            path: adapter_wasm,
-            manifest: Some(workspace_path("modules/examples/echo-venue/module.toml")),
-            http_allow: Vec::new(),
-            messaging_topics: Vec::new(),
-        }],
-        modules: vec![ModuleEntry {
-            path: module_wasm,
-            manifest: Some(workspace_path("modules/examples/echo-keeper/module.toml")),
-        }],
-        ..Default::default()
-    };
-    let videre = Arc::new(platform(&config));
-    let extensions = videre_assembly(&videre);
-    let linker = make_linker(&engine, &extensions);
-
-    let mut supervisor =
-        Supervisor::boot(&engine, &linker, &config, &components, &extensions, None)
-            .await
-            .expect("boot");
-    assert_eq!(
-        supervisor.adapter_alive_count(),
-        1,
-        "echo-venue is routable"
-    );
-    assert_eq!(supervisor.alive_count(), 1, "echo-keeper is alive");
-
-    // One block drives the keeper's async on_block: quote, submit,
-    // status, cancel, all through the typed client.
-    assert_eq!(supervisor.dispatch_block(block(1)).await, 1);
-
-    // The accepted receipt is under status watch; echo settles
-    // instantly, so the first poll fans the terminal status back.
-    let registry = registry_of(&supervisor);
-    let mut delivered = 0;
-    for _ in 0..2 {
-        for update in registry.poll_status_transitions().await {
-            assert_eq!(update.venue, "echo-venue");
-            delivered += supervisor
-                .dispatch_extension_event(status_event(update))
-                .await;
-        }
-    }
-    assert_eq!(delivered, 1, "one terminal status delivered to the keeper");
-    assert_eq!(supervisor.alive_count(), 1, "keeper must remain alive");
-
-    // Every typed verb observably ran.
-    let runs = logs.list_runs("echo-keeper");
-    assert_eq!(runs.len(), 1, "one run recorded for echo-keeper");
-    let page = logs.read(&runs[0].run, 0);
-    let messages: Vec<&str> = page.records.iter().map(|r| r.message.as_str()).collect();
-    for needle in [
-        "quoted at echo-venue",
-        "submitted to echo-venue",
-        "status at echo-venue",
-        "cancelled at echo-venue",
-        "intent status from venue echo-venue",
-    ] {
-        assert!(
-            messages.iter().any(|m| m.contains(needle)),
-            "missing `{needle}`; records were: {messages:?}",
-        );
-    }
-}
-
-/// The body-version handshake refuses a mismatched pair: an adapter decoding
-/// only v1 against a keeper encoding v2 fails the boot before instantiation.
-#[tokio::test]
-async fn e2e_mismatched_body_versions_refuse_the_pair_at_boot() {
-    let (Some(adapter_wasm), Some(module_wasm)) = (
-        module_wasm_or_skip("echo-venue"),
-        module_wasm_or_skip("echo-client"),
-    ) else {
-        return;
-    };
-
-    let dir = tempfile::tempdir().expect("tempdir");
-    let adapter_manifest = dir.path().join("echo-venue.toml");
-    std::fs::write(
-        &adapter_manifest,
-        r#"
-[module]
-name = "echo-venue"
-kind = "venue-adapter"
-
-[capabilities]
-required = ["chain"]
-
-[venue]
-body_versions = [1]
-"#,
-    )
-    .expect("write adapter manifest");
-    let keeper_manifest = dir.path().join("echo-client.toml");
-    std::fs::write(
-        &keeper_manifest,
-        r#"
-[module]
-name = "echo-client"
-
-[capabilities]
-required = ["client", "logging"]
-
-[venue]
-body_version = 2
-"#,
-    )
-    .expect("write keeper manifest");
-
-    let engine = make_wasmtime_engine();
-    let config = EngineConfig {
-        adapters: vec![AdapterEntry {
-            path: adapter_wasm,
-            manifest: Some(adapter_manifest),
-            http_allow: Vec::new(),
-            messaging_topics: Vec::new(),
-        }],
-        modules: vec![ModuleEntry {
-            path: module_wasm,
-            manifest: Some(keeper_manifest),
-        }],
-        ..Default::default()
-    };
-    let videre = Arc::new(platform(&config));
-    let extensions = videre_assembly(&videre);
-    let linker = make_linker(&engine, &extensions);
-    let components = mock_components();
-
-    let Err(err) =
-        Supervisor::boot(&engine, &linker, &config, &components, &extensions, None).await
-    else {
-        panic!("mismatched pair must refuse to boot");
-    };
-    let chain = format!("{err:#}");
-    assert!(chain.contains("body version 2"), "{chain}");
-    assert!(chain.contains("echo-venue decodes {1}"), "{chain}");
-}
-
-/// An adapter whose `body-versions()` export diverges from its manifest
-/// `[venue] body_versions` fails its own install.
-#[tokio::test]
-async fn e2e_manifest_export_divergence_refuses_the_adapter_at_boot() {
-    let Some(adapter_wasm) = module_wasm_or_skip("echo-venue") else {
-        return;
-    };
-
-    let dir = tempfile::tempdir().expect("tempdir");
-    let adapter_manifest = dir.path().join("echo-venue.toml");
-    std::fs::write(
-        &adapter_manifest,
-        r#"
-[module]
-name = "echo-venue"
-kind = "venue-adapter"
-
-[capabilities]
-required = ["chain"]
-
-[venue]
-body_versions = [1, 2]
-"#,
-    )
-    .expect("write adapter manifest");
-
-    let engine = make_wasmtime_engine();
-    let config = EngineConfig {
-        adapters: vec![AdapterEntry {
-            path: adapter_wasm,
-            manifest: Some(adapter_manifest),
-            http_allow: Vec::new(),
-            messaging_topics: Vec::new(),
-        }],
-        ..Default::default()
-    };
-    let videre = Arc::new(platform(&config));
-    let extensions = videre_assembly(&videre);
-    let linker = make_linker(&engine, &extensions);
-    let components = mock_components();
-
-    let Err(err) =
-        Supervisor::boot(&engine, &linker, &config, &components, &extensions, None).await
-    else {
-        panic!("a diverging adapter must refuse to boot");
-    };
-    let chain = format!("{err:#}");
-    assert!(chain.contains("exports body versions {1}"), "{chain}");
-    assert!(chain.contains("declares {1, 2}"), "{chain}");
-}
-
-/// An adapter whose manifest name is whitespace-only fails install at the
-/// venue-id boundary instead of registering a blank venue id.
-#[tokio::test]
-async fn e2e_blank_manifest_name_refuses_the_adapter_at_boot() {
-    let Some(adapter_wasm) = module_wasm_or_skip("echo-venue") else {
-        return;
-    };
-
-    let dir = tempfile::tempdir().expect("tempdir");
-    let adapter_manifest = dir.path().join("echo-venue.toml");
-    std::fs::write(
-        &adapter_manifest,
-        r#"
-[module]
-name = "  "
-kind = "venue-adapter"
-
-[capabilities]
-required = ["chain"]
-
-[venue]
-body_versions = [1]
-"#,
-    )
-    .expect("write adapter manifest");
-
-    let engine = make_wasmtime_engine();
-    let config = EngineConfig {
-        adapters: vec![AdapterEntry {
-            path: adapter_wasm,
-            manifest: Some(adapter_manifest),
-            http_allow: Vec::new(),
-            messaging_topics: Vec::new(),
-        }],
-        ..Default::default()
-    };
-    let videre = Arc::new(platform(&config));
-    let extensions = videre_assembly(&videre);
-    let linker = make_linker(&engine, &extensions);
-    let components = mock_components();
-
-    let Err(err) =
-        Supervisor::boot(&engine, &linker, &config, &components, &extensions, None).await
-    else {
-        panic!("a blank-named adapter must refuse to boot");
-    };
-    let chain = format!("{err:#}");
-    assert!(
-        chain.contains("venue id must not be empty or whitespace-only"),
-        "{chain}"
-    );
-}
-
-// ── venue-adapter trap recovery ───────────────────────────────────────
-
-/// Boot one flaky-venue adapter over the mock chain, its head at the
-/// fixture's poison sentinel. Returns the chain handle for recovery.
-async fn boot_flaky_venue(
-    adapter_wasm: PathBuf,
-    limits: ModuleLimits,
-) -> (Supervisor<MockTypes>, MockChainProvider) {
-    let chain = MockChainProvider::new();
-    chain.on_method(ChainMethod::EthBlockNumber, "\"0xdead\"");
-    let components =
-        nexum_runtime::test_utils::mock_components_from(chain.clone(), MockStateStore::new());
-    let engine = make_wasmtime_engine();
-    let config = EngineConfig {
-        adapters: vec![AdapterEntry {
-            path: adapter_wasm,
-            manifest: Some(workspace_path("modules/fixtures/flaky-venue/module.toml")),
-            http_allow: Vec::new(),
-            messaging_topics: Vec::new(),
-        }],
-        limits,
-        ..Default::default()
-    };
-    let videre = Arc::new(platform(&config));
-    let extensions = videre_assembly(&videre);
-    let linker = make_linker(&engine, &extensions);
-    let supervisor = Supervisor::boot(&engine, &linker, &config, &components, &extensions, None)
-        .await
-        .expect("boot");
-    (supervisor, chain)
-}
-
-/// The trap-to-recovery lifecycle over a real wasm adapter: a trapped venue
-/// is `unavailable` (not `unknown-venue`), the restart sweep reinstantiates
-/// it after backoff, and a submit then succeeds again.
-#[tokio::test]
-async fn e2e_trapped_adapter_is_swept_and_restarts() {
-    let Some(wasm) = module_wasm_or_skip("flaky-venue") else {
-        return;
-    };
-    let (mut supervisor, chain) = boot_flaky_venue(wasm, ModuleLimits::default()).await;
-    assert_eq!(supervisor.adapter_count(), 1);
-    assert_eq!(supervisor.adapter_alive_count(), 1, "boots alive");
-    let registry = registry_of(&supervisor);
-    let flaky = venue("flaky-venue");
-
-    // The poison head detonates submit: the guest panic traps the store
-    // and the shared liveness drops.
-    let err = registry
-        .submit("mod-a", &flaky, b"body".to_vec())
-        .await
-        .expect_err("the poison head traps the adapter");
-    assert!(matches!(err, VenueError::Unavailable(_)), "{err:?}");
-    assert_eq!(
-        supervisor.adapter_alive_count(),
-        0,
-        "the trap drops liveness"
-    );
-
-    // Temporarily dead resolves distinctly from never installed.
     assert!(matches!(
-        registry.submit("mod-a", &flaky, b"body".to_vec()).await,
-        Err(VenueError::Unavailable(_))
+        registry.status(&cow(), b"body".to_vec()).await,
+        Ok(IntentStatus::Pending)
     ));
+    registry
+        .cancel(&cow(), b"body".to_vec())
+        .await
+        .expect("cancel succeeds");
+    assert!(
+        cancelled.load(Ordering::SeqCst),
+        "the venue's own cancel ran, not just the registry's dispatch",
+    );
+}
+
+/// An id no venue registered under resolves to `unknown-venue`, distinct
+/// from a registered venue that is dead.
+#[tokio::test]
+async fn an_unregistered_venue_is_unknown_and_a_dead_one_unavailable() {
+    let liveness = Liveness::new();
+    let registry = VenueRegistryBuilder::new(SubmitQuota::default()).build();
+    registry
+        .register(
+            cow(),
+            liveness.clone(),
+            BTreeSet::new(),
+            ScriptedVenue::new([]),
+        )
+        .expect("register the scripted venue");
+
     assert!(matches!(
         registry
-            .submit("mod-a", &venue("unlisted"), b"body".to_vec())
+            .submit(
+                "mod-a",
+                &VenueId::new("unlisted").expect("valid venue id"),
+                b"b".to_vec()
+            )
             .await,
         Err(VenueError::UnknownVenue)
     ));
 
-    // The venue recovers; past the 1s backoff the dispatch-time sweep
-    // reinstalls the adapter on a fresh store.
-    chain.on_method(ChainMethod::EthBlockNumber, "\"0x1\"");
-    tokio::time::sleep(Duration::from_millis(1_200)).await;
-    supervisor.dispatch_block(block(1)).await;
-    assert_eq!(supervisor.adapter_alive_count(), 1, "the sweep revived it");
-    let outcome = registry
-        .submit("mod-a", &flaky, b"body".to_vec())
-        .await
-        .expect("the recovered adapter accepts");
-    assert!(matches!(outcome, SubmitOutcome::Accepted(r) if r == b"body"));
-}
-
-/// A crash-looping adapter is quarantined by the poison sweep: at the
-/// threshold the restarts stop and the venue stays dead.
-#[tokio::test]
-async fn e2e_crash_looping_adapter_is_poisoned() {
-    let Some(wasm) = module_wasm_or_skip("flaky-venue") else {
-        return;
-    };
-    let limits = ModuleLimits {
-        poison: PoisonLimitsSection {
-            max_failures: Some(2),
-            window_secs: Some(600),
-        },
-        ..ModuleLimits::default()
-    };
-    // The chain head stays at the poison sentinel for the whole test: every
-    // submit after a restart traps again.
-    let (mut supervisor, _chain) = boot_flaky_venue(wasm, limits).await;
-    let registry = registry_of(&supervisor);
-    let flaky = venue("flaky-venue");
-
-    // Trap 1, then a successful restart past the 1s backoff.
-    let _ = registry.submit("mod-a", &flaky, b"body".to_vec()).await;
-    tokio::time::sleep(Duration::from_millis(1_200)).await;
-    supervisor.dispatch_block(block(1)).await;
-    assert_eq!(supervisor.adapter_alive_count(), 1, "first restart lands");
-
-    // Trap 2 crosses the 2-failure threshold: the sweep quarantines the
-    // adapter instead of scheduling another restart.
-    let _ = registry.submit("mod-a", &flaky, b"body".to_vec()).await;
-    supervisor.dispatch_block(block(1)).await;
-    assert_eq!(supervisor.adapter_alive_count(), 0, "quarantined");
-
-    // Past every backoff the poisoned adapter stays dead and unavailable.
-    tokio::time::sleep(Duration::from_millis(1_500)).await;
-    supervisor.dispatch_block(block(1)).await;
-    assert_eq!(
-        supervisor.adapter_alive_count(),
-        0,
-        "no restart while poisoned"
-    );
+    liveness.mark_dead();
     assert!(matches!(
-        registry.submit("mod-a", &flaky, b"body".to_vec()).await,
+        registry.submit("mod-a", &cow(), b"b".to_vec()).await,
         Err(VenueError::Unavailable(_))
     ));
 }
 
-// ── service-missing unknown-venue ─────────────────────────────────────
+// ── routing policy ────────────────────────────────────────────────────
 
-/// The videre platform with its registry service withheld: `service`
-/// returns `None`, so `HostServices::from_extensions` seeds no venue
-/// registry.
-struct ClientWithoutRegistry(Videre);
+/// The quota the composition root builds the registry with rate-limits a
+/// caller once its budget is spent, per caller.
+#[tokio::test]
+async fn the_submit_quota_rate_limits_the_spending_caller_only() {
+    let registry =
+        VenueRegistryBuilder::new(SubmitQuota::new(1, Duration::from_secs(3600))).build();
+    registry
+        .register(
+            cow(),
+            Liveness::new(),
+            BTreeSet::new(),
+            ScriptedVenue::new([]),
+        )
+        .expect("register the scripted venue");
 
-impl Extension<MockTypes> for ClientWithoutRegistry {
-    fn namespace(&self) -> &'static str {
-        Extension::<MockTypes>::namespace(&self.0)
-    }
-
-    fn capabilities(&self) -> NamespaceCaps {
-        Extension::<MockTypes>::capabilities(&self.0)
-    }
-
-    fn link(&self, linker: &mut Linker<HostState<MockTypes>>) -> anyhow::Result<()> {
-        Extension::<MockTypes>::link(&self.0, linker)
-    }
-
-    fn manifest_sections(&self) -> &'static [&'static str] {
-        Extension::<MockTypes>::manifest_sections(&self.0)
-    }
-
-    fn subscriptions(&self) -> &'static [&'static str] {
-        Extension::<MockTypes>::subscriptions(&self.0)
-    }
-
-    fn admit_worker(
-        &self,
-        worker: &str,
-        sections: &ExtensionSections,
-        providers: &[ProviderManifest],
-    ) -> anyhow::Result<()> {
-        Extension::<MockTypes>::admit_worker(&self.0, worker, sections, providers)
-    }
+    assert!(
+        registry
+            .submit("mod-a", &cow(), b"b".to_vec())
+            .await
+            .is_ok()
+    );
+    assert!(matches!(
+        registry.submit("mod-a", &cow(), b"b".to_vec()).await,
+        Err(VenueError::RateLimited(rl)) if rl.retry_after_ms == Some(3_600_000)
+    ));
+    assert!(
+        registry
+            .submit("mod-b", &cow(), b"b".to_vec())
+            .await
+            .is_ok(),
+        "a second caller has its own budget",
+    );
 }
 
-/// The service-lookup miss: with no registry service seeded, `client.rs`
-/// resolves every venue call to `unknown-venue`, distinct from the
-/// adapter-map miss where the registry is present but the venue id unlisted.
+/// The watch cap bounds the status-watch set: the overflow is refused and
+/// the live watches are kept.
 #[tokio::test]
-async fn client_without_registry_service_resolves_every_venue_to_unknown() {
-    let Some(wasm) = module_wasm_or_skip("echo-client") else {
-        return;
+async fn the_watch_limit_bounds_the_status_watch_set() {
+    let registry = VenueRegistryBuilder::new(SubmitQuota::default())
+        .with_watch_limit(WatchLimit::new(1, Duration::from_secs(3600)))
+        .build();
+    registry
+        .register(
+            cow(),
+            Liveness::new(),
+            BTreeSet::new(),
+            ScriptedVenue::new([]),
+        )
+        .expect("register the scripted venue");
+
+    registry
+        .submit("mod-a", &cow(), b"first".to_vec())
+        .await
+        .expect("submit succeeds");
+    registry
+        .submit("mod-a", &cow(), b"second".to_vec())
+        .await
+        .expect("the submission still lands; only its watch is refused");
+    assert_eq!(registry.watched_count(), 1, "the cap bounds the set");
+
+    let err = registry
+        .observe(&cow(), b"third".to_vec())
+        .expect_err("an observe past the cap is refused typedly");
+    assert!(matches!(err, VenueError::Unavailable(_)));
+}
+
+// ── the keeper handshake ──────────────────────────────────────────────
+
+/// A keeper boots only when every registered venue decodes the one body
+/// version it encodes; the refusal names the version and the decoded set.
+#[test]
+fn the_body_version_handshake_gates_a_keeper_on_the_registered_venues() {
+    let videre = Videre::from_registry(registry_with(ScriptedVenue::new([]), [1, 2]));
+    let keeper = sections("[venue]\nbody_version = 2");
+    Extension::<MockTypes>::admit_worker(&videre, "keeper", &keeper).expect("admitted");
+
+    let stale = sections("[venue]\nbody_version = 3");
+    let err = Extension::<MockTypes>::admit_worker(&videre, "keeper", &stale)
+        .expect_err("no registered venue decodes version 3");
+    // `ExtensionError` is a thiserror enum, so its Display already
+    // interpolates the refusal it wraps; no alternate flag walks a chain.
+    let chain = err.to_string();
+    assert!(chain.contains("body version 3"), "{chain}");
+    assert!(chain.contains("cow decodes {1, 2}"), "{chain}");
+}
+
+/// A venue registering an empty version set has opted out of the
+/// handshake: it neither satisfies a declaring keeper nor refuses one on
+/// its own.
+#[test]
+fn a_venue_that_declares_no_versions_never_satisfies_a_declaring_keeper() {
+    let videre = Videre::from_registry(registry_with(ScriptedVenue::new([]), []));
+    let keeper = sections("[venue]\nbody_version = 1");
+    let err = Extension::<MockTypes>::admit_worker(&videre, "keeper", &keeper)
+        .expect_err("an opted-out venue cannot satisfy the keeper");
+    assert!(
+        err.to_string().contains("no registered venue declares"),
+        "{err}",
+    );
+
+    // A keeper declaring nothing is admitted whatever is registered.
+    Extension::<MockTypes>::admit_worker(&videre, "keeper", &ExtensionSections::new())
+        .expect("an undeclared keeper opts out of the handshake");
+}
+
+// ── the status-poll source ────────────────────────────────────────────
+
+/// Open the platform's sources over a fresh task set, demanding `kinds`.
+fn open_sources(videre: &Videre, kinds: &BTreeSet<String>) -> usize {
+    let config = EngineConfig::default();
+    let manager = TaskManager::new();
+    let executor = manager.executor();
+    let mut tasks = TaskSet::new();
+    let mut sources = SourceContext::new(&config, kinds, &executor, &mut tasks);
+    Extension::<MockTypes>::open_sources(videre, &mut sources)
+        .expect("open the platform sources")
+        .len()
+}
+
+/// The demanded kind: one owned set, as the source plan hands it over.
+fn demanding_intent_status() -> BTreeSet<String> {
+    std::iter::once(INTENT_STATUS_KIND.to_owned()).collect()
+}
+
+/// The polled transition rides the extension trigger: the delivery carries
+/// the venue attribute for routing and the borsh envelope as its payload.
+#[tokio::test]
+async fn the_status_poll_source_delivers_a_polled_transition() {
+    let registry = VenueRegistryBuilder::new(SubmitQuota::default()).build();
+    // The one call site of the `test-utils` seam, which is `register` with
+    // no declared version set. The source does not read the handshake, so
+    // this test doubles as the seam's only coverage.
+    registry
+        .install_for_test(
+            cow(),
+            Liveness::new(),
+            ScriptedVenue::new([IntentStatus::Fulfilled]),
+        )
+        .expect("install the scripted venue");
+    registry
+        .submit("mod-a", &cow(), b"receipt".to_vec())
+        .await
+        .expect("submit succeeds");
+
+    let videre =
+        Videre::from_registry(registry.clone()).with_status_poll_interval(Duration::from_millis(5));
+
+    let config = EngineConfig::default();
+    let manager = TaskManager::new();
+    let executor = manager.executor();
+    let mut tasks = TaskSet::new();
+    let kinds = demanding_intent_status();
+    let mut streams = {
+        let mut sources = SourceContext::new(&config, &kinds, &executor, &mut tasks);
+        Extension::<MockTypes>::open_sources(&videre, &mut sources).expect("open the source")
     };
+    assert_eq!(streams.len(), 1, "one status-poll source opened");
 
-    // A [venue]-free manifest: no adapter boots under `boot_single`, so a
-    // keeper declaring `[venue] body_version` would be refused before it
-    // could reach the client face at all.
-    let dir = tempfile::tempdir().expect("tempdir");
-    let manifest = dir.path().join("echo-client.toml");
-    std::fs::write(
-        &manifest,
-        r#"
-[module]
-name = "echo-client"
+    let delivery = tokio::time::timeout(Duration::from_secs(5), streams[0].next())
+        .await
+        .expect("the poll task reports within the timeout")
+        .expect("the source yields a delivery");
 
-[capabilities]
-required = ["client", "logging"]
+    assert_eq!(delivery.extension_kind, INTENT_STATUS_KIND);
+    assert_eq!(delivery.attrs, vec![("venue", "cow".to_owned())]);
+    let Trigger::Extension(trigger) = delivery.trigger else {
+        panic!("the platform delivers an extension trigger");
+    };
+    assert_eq!(trigger.extension_kind, INTENT_STATUS_KIND);
+    let update = IntentStatusUpdate::decode(&trigger.payload).expect("the envelope decodes");
+    assert_eq!(update.venue, "cow");
+    assert_eq!(update.receipt, b"receipt");
+    let body = StatusBody::decode(&update.status).expect("the status body decodes");
+    assert_eq!(body.status, videre_status_body::IntentStatus::Fulfilled);
 
-[[subscription]]
-kind     = "block"
-chain_id = 1
-"#,
-    )
-    .expect("write manifest");
+    // The terminal status pruned the watch, so nothing is left to poll.
+    assert_eq!(registry.watched_count(), 0);
+}
 
-    let engine = make_wasmtime_engine();
-    let extensions: Vec<Arc<dyn Extension<MockTypes>>> = vec![Arc::new(ClientWithoutRegistry(
-        platform(&EngineConfig::default()),
-    ))];
-    let linker = make_linker(&engine, &extensions);
-    let components = mock_components();
-    let logs = components.logs.clone();
-    let limits = ModuleLimits::default();
-
-    let mut supervisor = Supervisor::boot_single(
-        &engine,
-        &linker,
-        &wasm,
-        Some(&manifest),
-        &components,
-        &limits,
-        &extensions,
-        None,
-    )
-    .await
-    .expect("boot_single");
-
-    // The precondition of the client.rs unknown-venue branch: the booted
-    // service map holds no venue registry.
-    assert!(
-        supervisor
-            .services()
-            .get::<VenueRegistry>(VenueRegistry::NAMESPACE)
-            .is_none(),
-        "boot_single must seed no registry service",
+/// With nothing demanding the kind, or with no venue registered, the
+/// platform opens no source at all.
+#[tokio::test]
+async fn the_status_poll_source_stays_closed_without_demand_or_a_venue() {
+    let with_venue = Videre::from_registry(registry_with(ScriptedVenue::new([]), [1]));
+    assert_eq!(
+        open_sources(&with_venue, &BTreeSet::new()),
+        0,
+        "no demanded kind, no source",
     );
 
-    // One chain-1 block drives the keeper's quote then submit; with no
-    // registry both resolve to unknown-venue, which the keeper absorbs.
-    assert_eq!(supervisor.dispatch_block(block(1)).await, 1);
-    assert_eq!(supervisor.alive_count(), 1, "the keeper stays alive");
+    let without_venue = platform();
+    assert_eq!(
+        open_sources(&without_venue, &demanding_intent_status()),
+        0,
+        "no registered venue, no source",
+    );
+}
 
-    let runs = logs.list_runs("echo-client");
-    assert_eq!(runs.len(), 1, "one run recorded for echo-client");
-    let page = logs.read(&runs[0].run, 0);
-    let messages: Vec<&str> = page.records.iter().map(|r| r.message.as_str()).collect();
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("quote at echo-venue was refused")),
-        "quote resolved to unknown-venue; records were: {messages:?}",
+// ── the client import ─────────────────────────────────────────────────
+
+/// The keeper-facing `videre:venue/client` import adds to a worker linker,
+/// beside the capability and trigger kinds the platform declares.
+///
+/// `link` also fills the process-wide registry slot the client glue reads,
+/// so this test is the only publisher in this binary. A test that needs its
+/// own registry must drive [`VenueRegistry`] directly, because the slot
+/// keeps the first publish for the life of the process.
+#[test]
+fn the_client_import_links_into_a_worker_linker() {
+    let videre = Videre::from_registry(registry_with(ScriptedVenue::new([]), [1]));
+    let engine = test_wasmtime_engine();
+    let mut linker: Linker<HostState<MockTypes>> = Linker::new(&engine);
+    Extension::<MockTypes>::link(&videre, &mut linker).expect("the client import links");
+
+    // The declared capability is the one the manifest grants a keeper.
+    let caps = Extension::<MockTypes>::capabilities(&videre);
+    assert_eq!(caps.prefix, "videre:venue/");
+    assert_eq!(caps.ifaces, &["client"]);
+    assert_eq!(
+        Extension::<MockTypes>::emits_trigger_kinds(&videre),
+        &[INTENT_STATUS_KIND],
     );
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("submit to echo-venue was refused")),
-        "submit resolved to unknown-venue; records were: {messages:?}",
-    );
+}
+
+/// One `Arc<dyn Extension<..>>` is what a composition root wires, so the
+/// platform must be object-safe at the seam it advertises.
+#[test]
+fn the_platform_is_wired_as_one_generic_extension() {
+    let extension: Arc<dyn Extension<MockTypes>> = Arc::new(platform());
+    assert_eq!(extension.namespace(), VenueRegistry::NAMESPACE);
+    assert_eq!(extension.manifest_sections(), &["venue"]);
 }

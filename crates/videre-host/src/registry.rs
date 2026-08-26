@@ -864,7 +864,7 @@ mod tests {
         }
         let registry = builder.build();
         registry
-            .install(cow(), Liveness::default(), adapter)
+            .register(cow(), Liveness::default(), BTreeSet::new(), adapter)
             .expect("install adapter");
         registry
     }
@@ -1184,12 +1184,50 @@ mod tests {
         let a = Arc::new(StubCalls::default());
         let b = Arc::new(StubCalls::default());
         registry
-            .install(cow(), Liveness::default(), StubAdapter::new(a))
+            .register(
+                cow(),
+                Liveness::default(),
+                BTreeSet::new(),
+                StubAdapter::new(a),
+            )
             .expect("first install");
         let err = registry
-            .install(cow(), Liveness::default(), StubAdapter::new(b))
+            .register(
+                cow(),
+                Liveness::default(),
+                BTreeSet::new(),
+                StubAdapter::new(b),
+            )
             .expect_err("second install collides");
         assert_eq!(err.venue, cow());
+    }
+
+    /// The handshake authority: every registered venue's declared set,
+    /// including the empty set of a venue that opted out.
+    #[test]
+    fn body_versions_reports_each_registered_venue_set() {
+        let registry = VenueRegistryBuilder::new(SubmitQuota::default()).build();
+        registry
+            .register(
+                cow(),
+                Liveness::default(),
+                BTreeSet::from([1, 2]),
+                StubAdapter::new(Arc::new(StubCalls::default())),
+            )
+            .expect("register the declaring venue");
+        registry
+            .register(
+                VenueId::new("uni").expect("valid venue id"),
+                Liveness::default(),
+                BTreeSet::new(),
+                StubAdapter::new(Arc::new(StubCalls::default())),
+            )
+            .expect("register the opted-out venue");
+
+        let versions = registry.body_versions();
+        assert_eq!(versions.len(), 2);
+        assert_eq!(versions[&cow()], BTreeSet::from([1, 2]));
+        assert!(versions[&VenueId::new("uni").expect("valid venue id")].is_empty());
     }
 
     #[tokio::test]
@@ -1198,7 +1236,12 @@ mod tests {
         let liveness = Liveness::default();
         let registry = VenueRegistryBuilder::new(SubmitQuota::default()).build();
         registry
-            .install(cow(), liveness.clone(), StubAdapter::new(calls.clone()))
+            .register(
+                cow(),
+                liveness.clone(),
+                BTreeSet::new(),
+                StubAdapter::new(calls.clone()),
+            )
             .expect("install adapter");
         liveness.mark_dead();
 
@@ -1220,17 +1263,19 @@ mod tests {
         let registry = VenueRegistryBuilder::new(SubmitQuota::default()).build();
         let liveness = Liveness::default();
         registry
-            .install(
+            .register(
                 cow(),
                 liveness.clone(),
+                BTreeSet::new(),
                 StubAdapter::new(Arc::new(StubCalls::default())),
             )
             .expect("first install");
         liveness.mark_dead();
         registry
-            .install(
+            .register(
                 cow(),
                 Liveness::default(),
+                BTreeSet::new(),
                 StubAdapter::new(Arc::new(StubCalls::default())),
             )
             .expect("a restart replaces the dead incumbent");
@@ -1321,9 +1366,10 @@ mod tests {
         let liveness = Liveness::default();
         let registry = VenueRegistryBuilder::new(SubmitQuota::default()).build();
         registry
-            .install(
+            .register(
                 cow(),
                 liveness.clone(),
+                BTreeSet::new(),
                 StubAdapter::new(Arc::new(StubCalls::default())),
             )
             .expect("install adapter");
@@ -1462,7 +1508,7 @@ mod tests {
             .with_watch_limit(watch_limit)
             .build();
         registry
-            .install(cow(), Liveness::default(), adapter)
+            .register(cow(), Liveness::default(), BTreeSet::new(), adapter)
             .expect("install adapter");
         registry
     }
@@ -1621,7 +1667,12 @@ mod tests {
             .build();
         let liveness = Liveness::default();
         registry
-            .install(cow(), liveness.clone(), StubAdapter::new(calls))
+            .register(
+                cow(),
+                liveness.clone(),
+                BTreeSet::new(),
+                StubAdapter::new(calls),
+            )
             .expect("install adapter");
         registry
             .submit("mod-a", &cow(), b"body".to_vec())
