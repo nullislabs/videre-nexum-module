@@ -73,6 +73,8 @@ impl<T: RuntimeTypes> Host for HostState<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policy::SubmitQuota;
+    use crate::registry::VenueRegistryBuilder;
 
     /// The seam every `Host` method routes the wire venue id through. The
     /// `VenueId` field is private to `registry`, so no method here can
@@ -88,5 +90,29 @@ mod tests {
             Err(VenueError::UnknownVenue)
         ));
         assert_eq!(venue_id("cow".to_owned()).expect("parses").as_str(), "cow");
+    }
+
+    fn empty_registry() -> Arc<VenueRegistry> {
+        Arc::new(VenueRegistryBuilder::new(SubmitQuota::default()).build())
+    }
+
+    /// The slot is process-wide, so this is the only test that publishes:
+    /// the first publish wins and a second is ignored, rather than tearing
+    /// a live registry out from under a store.
+    #[test]
+    fn the_first_published_registry_wins() {
+        assert!(
+            registry().is_err(),
+            "the slot is process-wide and this test must be its only \
+             publisher: no other unit test may call publish_registry or \
+             Videre::link",
+        );
+
+        let first = empty_registry();
+        publish_registry(Arc::clone(&first));
+        publish_registry(empty_registry());
+
+        let resolved = registry().expect("the published registry resolves");
+        assert!(Arc::ptr_eq(resolved, &first), "the first publish wins");
     }
 }
