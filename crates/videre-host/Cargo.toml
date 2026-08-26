@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "The videre venue platform as one nexum-runtime extension: the venue-adapter provider kind, the venue registry service, the advisory egress-guard seam, and the videre:venue/client interface."
+description = "The videre venue platform as one nexum-runtime extension: the venue registry, the native-Rust venue-invoker seam, the advisory egress-guard seam, and the videre:venue/client interface."
 
 [lints]
 workspace = true
