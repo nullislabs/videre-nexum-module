@@ -9,6 +9,6 @@
 # the nexum-runtime repo (the tarball unpacks under a
 # nexum-runtime-<rev>/ top-level directory).
 [nexum-host]
-url = "https://github.com/nullislabs/nexum-runtime/archive/d78a368aa0544dd8cf1100ce657df0eada781f1a.tar.gz"
+url = "https://github.com/nullislabs/nexum-runtime/archive/fd16db7709f01bf06116d98053a894de4b1f4adf.tar.gz"
 sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
 sha512 = "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
