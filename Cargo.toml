@@ -34,8 +34,10 @@ anyhow = "1"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
-# Cold `dyn` boot paths only (`ProviderKind::install`); hot guest traits
-# use native async-fn-in-trait.
+# Cold `dyn` boot paths only; hot guest traits use native
+# async-fn-in-trait, and the `VenueInvoker` adapter seam returns a
+# `BoxFuture` per call rather than going through this macro. Kept
+# available for a future boot-path trait; no core crate uses it today.
 async-trait = "0.1"
 
 # Serde + config.
