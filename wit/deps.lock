@@ -1,3 +1,6 @@
+# Written by hand to match wit/deps.toml, not by `wit-deps update`.
+# The sha256 and the sha512 are placeholders, not real digests: read the
+# note in wit/deps.toml before you trust them.
 [nexum-host]
 url = "https://github.com/nullislabs/nexum-runtime/archive/fd16db7709f01bf06116d98053a894de4b1f4adf.tar.gz"
 sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
