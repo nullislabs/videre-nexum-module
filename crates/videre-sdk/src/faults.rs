@@ -3,14 +3,16 @@
 //! transport seams speak, and the [`VenueError`] the intent face reports;
 //! plus [`VenueFault`], the owned client-side mirror of the wire error.
 //!
-//! Conversions are lossy only downward (a structured case folds to a
-//! string case, never the reverse), so `?` preserves the most structured
-//! form the target vocabulary can carry.
+//! Conversions are lossy only downward, so `?` preserves the most
+//! structured form the target vocabulary can carry. A structured case
+//! folds to a string case, never the reverse. The one exception is the
+//! retry hint: `nexum:host/types.fault.rate-limited` is a unit case, so
+//! a venue `rate-limit` payload folds to a unit case and its
+//! `retry-after-ms` is dropped rather than stringified.
 
 use nexum_sdk::host;
 use strum::IntoStaticStr;
 
-use crate::bindings::nexum::host::types::RateLimit as WireRateLimit;
 use crate::client::ClientError;
 use crate::{Fault, RateLimit, VenueError};
 
@@ -78,15 +80,13 @@ impl From<VenueError> for VenueFault {
 /// seams speak; exhaustive, so a new WIT case fails to compile here.
 pub fn fault_into_sdk(fault: Fault) -> host::Fault {
     match fault {
-        Fault::Unsupported(s) => host::Fault::Unsupported(s),
-        Fault::Unavailable(s) => host::Fault::Unavailable(s),
-        Fault::Denied(s) => host::Fault::Denied(s),
-        Fault::RateLimited(rl) => host::Fault::RateLimited(host::RateLimit {
-            retry_after_ms: rl.retry_after_ms,
-        }),
+        Fault::Unsupported(s) => host::Fault::unsupported(s),
+        Fault::Unavailable(s) => host::Fault::unavailable(s),
+        Fault::Denied(s) => host::Fault::denied(s),
+        Fault::RateLimited => host::Fault::RateLimited,
         Fault::Timeout => host::Fault::Timeout,
-        Fault::InvalidInput(s) => host::Fault::InvalidInput(s),
-        Fault::Internal(s) => host::Fault::Internal(s),
+        Fault::InvalidInput(s) => host::Fault::invalid_input(s),
+        Fault::Internal(s) => host::Fault::internal(s),
     }
 }
 
@@ -99,9 +99,7 @@ impl From<host::Fault> for Fault {
             host::Fault::Unsupported(s) => Fault::Unsupported(s),
             host::Fault::Unavailable(s) => Fault::Unavailable(s),
             host::Fault::Denied(s) => Fault::Denied(s),
-            host::Fault::RateLimited(rl) => Fault::RateLimited(WireRateLimit {
-                retry_after_ms: rl.retry_after_ms,
-            }),
+            host::Fault::RateLimited => Fault::RateLimited,
             host::Fault::Timeout => Fault::Timeout,
             host::Fault::InvalidInput(s) => Fault::InvalidInput(s),
             host::Fault::Internal(s) => Fault::Internal(s),
@@ -115,13 +113,16 @@ impl From<host::Fault> for Fault {
 /// structurally; the caller-shaped cases (`invalid-input`, `internal`)
 /// fold to retryable `unavailable`, since inside an intent function the
 /// caller is the adapter itself.
+///
+/// `nexum:host/types.fault.rate-limited` carries no retry hint, so the
+/// videre `rate-limit` this yields leaves `retry-after-ms` absent.
 impl From<host::Fault> for VenueError {
     fn from(fault: host::Fault) -> Self {
         match fault {
             host::Fault::Denied(s) => VenueError::Denied(s),
             host::Fault::Unsupported(_) => VenueError::Unsupported,
-            host::Fault::RateLimited(rl) => VenueError::RateLimited(RateLimit {
-                retry_after_ms: rl.retry_after_ms,
+            host::Fault::RateLimited => VenueError::RateLimited(RateLimit {
+                retry_after_ms: None,
             }),
             host::Fault::Timeout => VenueError::Timeout,
             host::Fault::Unavailable(s) => VenueError::Unavailable(s),
@@ -134,22 +135,27 @@ impl From<host::Fault> for VenueError {
 /// handler returns: an encode failure, a misnamed venue, and an invalid
 /// receipt are the caller's `invalid-input`; a receipt mismatch is a
 /// venue integrity `internal`; other refusals map structurally.
+///
+/// The nexum `rate-limited` fault is a unit case, so a venue's
+/// `retry-after-ms` does not cross this boundary. Read the hint off
+/// [`VenueFault::RateLimited`] before you convert, if a handler needs to
+/// pace its own retry.
 impl From<ClientError> for host::Fault {
     fn from(err: ClientError) -> Self {
         match err {
-            ClientError::Body(body) => host::Fault::InvalidInput(body.to_string()),
+            ClientError::Body(body) => host::Fault::invalid_input(body.to_string()),
             ClientError::Venue(fault) => match fault {
-                VenueFault::UnknownVenue => host::Fault::InvalidInput(fault.to_string()),
-                VenueFault::InvalidBody(s) => host::Fault::InvalidInput(s),
-                VenueFault::Unsupported => host::Fault::Unsupported(fault.to_string()),
-                VenueFault::Denied(s) => host::Fault::Denied(s),
-                VenueFault::RateLimited { retry_after_ms } => {
-                    host::Fault::RateLimited(host::RateLimit { retry_after_ms })
-                }
-                VenueFault::Unavailable(s) => host::Fault::Unavailable(s),
+                VenueFault::UnknownVenue => host::Fault::invalid_input(fault.to_string()),
+                VenueFault::InvalidBody(s) => host::Fault::invalid_input(s),
+                VenueFault::Unsupported => host::Fault::unsupported(fault.to_string()),
+                VenueFault::Denied(s) => host::Fault::denied(s),
+                // The nexum fault carries no retry hint, so the venue's
+                // `retry-after-ms` does not cross this boundary.
+                VenueFault::RateLimited { .. } => host::Fault::RateLimited,
+                VenueFault::Unavailable(s) => host::Fault::unavailable(s),
                 VenueFault::Timeout => host::Fault::Timeout,
-                VenueFault::InvalidReceipt => host::Fault::InvalidInput(fault.to_string()),
-                VenueFault::ReceiptMismatch => host::Fault::Internal(fault.to_string()),
+                VenueFault::InvalidReceipt => host::Fault::invalid_input(fault.to_string()),
+                VenueFault::ReceiptMismatch => host::Fault::internal(fault.to_string()),
             },
         }
     }
@@ -183,9 +189,7 @@ mod tests {
             Fault::Unsupported("u".into()),
             Fault::Unavailable("u".into()),
             Fault::Denied("d".into()),
-            Fault::RateLimited(crate::bindings::nexum::host::types::RateLimit {
-                retry_after_ms: Some(250),
-            }),
+            Fault::RateLimited,
             Fault::Timeout,
             Fault::InvalidInput("i".into()),
             Fault::Internal("i".into()),
@@ -203,11 +207,11 @@ mod tests {
             VenueError::Denied("nope".into()),
         );
         assert_eq!(VenueError::from(host::Fault::Timeout), VenueError::Timeout);
+        // The nexum fault has no retry hint, so the venue error carries
+        // none either.
         assert!(matches!(
-            VenueError::from(host::Fault::RateLimited(host::RateLimit {
-                retry_after_ms: Some(250),
-            })),
-            VenueError::RateLimited(rl) if rl.retry_after_ms == Some(250)
+            VenueError::from(host::Fault::RateLimited),
+            VenueError::RateLimited(rl) if rl.retry_after_ms.is_none()
         ));
         assert!(matches!(
             VenueError::from(host::Fault::InvalidInput("bug".into())),
