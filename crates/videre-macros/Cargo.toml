@@ -17,3 +17,4 @@ nexum-world = { git = "https://github.com/nullislabs/nexum-runtime", rev = "fd16
 proc-macro2.workspace = true
 quote.workspace = true
 syn = { workspace = true, features = ["full"] }
+toml.workspace = true

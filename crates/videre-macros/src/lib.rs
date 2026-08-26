@@ -30,28 +30,25 @@ pub fn derive_intent_body(input: TokenStream) -> TokenStream {
         .into()
 }
 
-/// The manifest `kind` a venue adapter must declare.
-const VENUE_KIND: &str = "venue-adapter";
-
 /// Generate the per-cdylib glue for a venue adapter.
 ///
-/// Apply to an `impl VenueAdapter for MyVenue` block: reads `module.toml`,
-/// asserts `[module] kind = venue-adapter`, synthesizes a world exporting
-/// `videre:venue/adapter` and importing exactly the manifest's declared
-/// scoped transport, then emits `wit_bindgen::generate!`, the trait impl,
-/// and the SDK export codegen. The world remaps the `videre` and
-/// `nexum:host` types onto the SDK bindings, so the impl speaks `videre_sdk`
-/// types directly. A capability outside the venue-permitted set (`chain`,
-/// `messaging`, `http`) is rejected at expansion. The consuming crate must
-/// declare `wit-bindgen` and `videre-sdk` as direct dependencies.
+/// Apply to an `impl VenueAdapter for MyVenue` block: reads
+/// `component.toml`, synthesizes a world exporting `videre:venue/adapter`
+/// and importing exactly the manifest's declared scoped transport, then
+/// emits `wit_bindgen::generate!`, the trait impl, and the SDK export
+/// codegen. The world remaps the `videre` and `nexum:host` types onto the
+/// SDK bindings, so the impl speaks `videre_sdk` types directly. A
+/// capability outside the venue-permitted set (`chain`, `http`) is
+/// rejected at expansion. The consuming crate must declare `wit-bindgen`
+/// and `videre-sdk` as direct dependencies.
 ///
 /// # Client marker
 ///
 /// With arguments (`#[videre_sdk::venue(id = "cow", body = CowBody)]`) it
 /// instead fills a client-side `impl Venue for Marker {}`, emitting the
-/// `const ID`/`type Body` and asserting the id equals `[module] name`. No
-/// component world, so a keeper linking the client slice never pulls adapter
-/// bindgen.
+/// `const ID`/`type Body` and asserting the id equals `[component] name`.
+/// No component world, so a keeper linking the client slice never pulls
+/// adapter bindgen.
 #[proc_macro_attribute]
 pub fn venue(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(item as ItemImpl);
@@ -120,7 +117,7 @@ pub fn venue(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     quote! {
         // Anchor a rebuild on the manifest: the emitted world is derived
-        // from it, so an edited [capabilities] must recompile the adapter.
+        // from it, so an edited [dependencies] must recompile the adapter.
         const _: &[u8] = ::core::include_bytes!(#manifest_path);
 
         wit_bindgen::generate!({
@@ -146,12 +143,12 @@ pub fn venue(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// Generate the per-cdylib glue for a keeper: a worker driving venues
 /// through the typed client.
 ///
-/// Apply to an `impl` block whose functions are the event handlers (`init`,
-/// `on_block`, `on_chain_logs`, `on_tick`, `on_message`,
-/// `on_intent_status`); handlers may be `async`, completed on the guest
-/// boundary, so one can await the typed `VenueClient` directly. Reads
-/// `module.toml`, requires the `client` capability, synthesizes the module
-/// world as `#[module]` does, and remaps the videre interfaces onto the SDK
+/// Apply to an `impl` block whose functions are the trigger handlers
+/// (`init`, `on_block`, `on_event`, `on_schedule`, `on_intent_status`);
+/// handlers may be `async`, completed on the guest boundary, so one can
+/// await the typed `VenueClient` directly. Reads `component.toml`,
+/// requires the `client` dependency, synthesizes the module world as
+/// `#[module]` does, and remaps the videre interfaces onto the SDK
 /// bindings so the client and wire share one type set. Emits a
 /// `From<ClientError>` onto the wire fault, so `?` works in handlers. The
 /// consuming crate must declare `wit-bindgen`, `videre-sdk`, and `nexum-sdk`
@@ -172,29 +169,21 @@ pub fn keeper(attr: TokenStream, item: TokenStream) -> TokenStream {
         .into()
 }
 
-/// Read `module.toml`, assert the venue-adapter kind, and synthesize the
-/// venue-adapter world from its `[capabilities]`. Returns the manifest path
-/// (rebuild anchor) and the world.
+/// Read `component.toml` and synthesize the venue-adapter world from its
+/// `[dependencies]`. Returns the manifest path (rebuild anchor) and the
+/// world.
 fn derive_venue_world() -> Result<(String, nexum_world::ModuleWorld), String> {
-    let manifest_path = nexum_world::manifest_dir()?.join("module.toml");
+    let manifest_path = nexum_world::manifest_dir()
+        .map_err(|e| e.to_string())?
+        .join(world::MANIFEST_FILE);
     let text = std::fs::read_to_string(&manifest_path).map_err(|e| {
         format!(
             "could not read {} ({e}); #[videre_sdk::venue] derives the component's WIT world \
-             from the manifest's [capabilities] section, so the manifest must sit next to \
+             from the manifest's [dependencies] section, so the manifest must sit next to \
              Cargo.toml",
             manifest_path.display()
         )
     })?;
-    let kind = nexum_world::manifest_kind(&text)
-        .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
-    if kind.as_deref() != Some(VENUE_KIND) {
-        return Err(format!(
-            "{}: [module] kind must be \"{VENUE_KIND}\" for a #[videre_sdk::venue] adapter, \
-             found {}",
-            manifest_path.display(),
-            kind.map_or_else(|| "none".to_owned(), |kind| format!("\"{kind}\"")),
-        ));
-    }
     let declared = nexum_world::manifest_capabilities(&text)
         .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
     let manifest_path = manifest_path.to_string_lossy().into_owned();

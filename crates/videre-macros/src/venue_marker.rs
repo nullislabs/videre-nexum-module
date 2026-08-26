@@ -1,5 +1,5 @@
 //! The client-side `#[videre_sdk::venue(id = "...", body = Type)]` path:
-//! fills a `Venue` marker impl and checks the id against `module.toml`
+//! fills a `Venue` marker impl and checks the id against `component.toml`
 //! at expansion. No component world, so a keeper linking the client
 //! slice never pulls adapter bindgen.
 
@@ -46,7 +46,7 @@ impl Parse for Args {
 
 /// Expand `#[videre_sdk::venue(id, body)]` on an `impl Venue for Marker
 /// {}` block: inject `const ID`/`type Body` from the args and assert the
-/// id equals the crate manifest's `[module] name`.
+/// id equals the crate manifest's `[component] name`.
 pub fn expand(attr: TokenStream, input: &ItemImpl) -> Result<TokenStream, syn::Error> {
     let args: Args = syn::parse2(attr)?;
 
@@ -89,7 +89,7 @@ pub fn expand(attr: TokenStream, input: &ItemImpl) -> Result<TokenStream, syn::E
     let manifest_path = manifest_id_check(id)?;
 
     Ok(quote! {
-        // Rebuild anchor: an edited `[module] name` re-runs the check.
+        // Rebuild anchor: an edited `[component] name` re-runs the check.
         const _: &[u8] = ::core::include_bytes!(#manifest_path);
 
         impl #trait_path for #self_ty {
@@ -100,25 +100,25 @@ pub fn expand(attr: TokenStream, input: &ItemImpl) -> Result<TokenStream, syn::E
     })
 }
 
-/// Assert `id` equals the crate manifest's `[module] name`, returning the
-/// manifest path for the rebuild anchor.
+/// Assert `id` equals the crate manifest's `[component] name`, returning
+/// the manifest path for the rebuild anchor.
 fn manifest_id_check(id: &LitStr) -> Result<String, syn::Error> {
     let err = |msg: String| syn::Error::new(id.span(), msg);
     let manifest_path = nexum_world::manifest_dir()
-        .map_err(&err)?
-        .join("module.toml");
+        .map_err(|e| err(e.to_string()))?
+        .join(crate::world::MANIFEST_FILE);
     let text = std::fs::read_to_string(&manifest_path).map_err(|e| {
         err(format!(
             "could not read {} ({e}); #[videre_sdk::venue(id = ..)] holds the id to the \
-             manifest's [module] name, so the manifest must sit next to Cargo.toml",
+             manifest's [component] name, so the manifest must sit next to Cargo.toml",
             manifest_path.display()
         ))
     })?;
-    let name = nexum_world::manifest_name(&text)
+    let name = crate::world::manifest_name(&text)
         .map_err(|e| err(format!("{}: {e}", manifest_path.display())))?;
     if name != id.value() {
         return Err(err(format!(
-            "{}: venue id {:?} disagrees with [module] name {name:?}",
+            "{}: venue id {:?} disagrees with [component] name {name:?}",
             manifest_path.display(),
             id.value(),
         )));
