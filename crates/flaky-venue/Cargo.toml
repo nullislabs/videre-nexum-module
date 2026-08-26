@@ -1,0 +1,19 @@
+[package]
+name = "flaky-venue"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Evil-by-design native venue adapter fixture: submit fails and kills the adapter while the chain head reads as the poison sentinel, and serves again once an operator heals the head and revives it."
+
+[lints]
+workspace = true
+
+[dependencies]
+# The venue seam. `VenueInvoker`, `Liveness`, and the shared bindings types
+# all come from the host crate now that a venue is a native Rust adapter.
+videre-host = { path = "../videre-host" }
+futures.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

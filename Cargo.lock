@@ -1870,9 +1870,10 @@ dependencies = [
 name = "echo-venue"
 version = "0.1.0"
 dependencies = [
- "videre-sdk",
+ "futures",
+ "tokio",
+ "videre-host",
  "videre-test",
- "wit-bindgen 0.59.0",
 ]
 
 [[package]]
@@ -2059,8 +2060,9 @@ checksum = "0ce7134b9999ecaf8bcd65542e436736ef32ddca1b3e06094cb6ec5755203b80"
 name = "flaky-venue"
 version = "0.1.0"
 dependencies = [
- "videre-sdk",
- "wit-bindgen 0.59.0",
+ "futures",
+ "tokio",
+ "videre-host",
 ]
 
 [[package]]

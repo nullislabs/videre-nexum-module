@@ -1,5 +1,7 @@
 [workspace]
 members = [
+    "crates/echo-venue",
+    "crates/flaky-venue",
     "crates/no-std-probe",
     "crates/videre-host",
     "crates/videre-macros",
@@ -8,8 +10,6 @@ members = [
     "crates/videre-test",
     "modules/examples/echo-client",
     "modules/examples/echo-keeper",
-    "modules/examples/echo-venue",
-    "modules/fixtures/flaky-venue",
 ]
 resolver = "2"
 
