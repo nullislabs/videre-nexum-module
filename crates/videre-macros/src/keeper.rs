@@ -1,6 +1,6 @@
 //! Expansion for `#[keeper]`: the worker mirror of `#[module]`. Same world
 //! synthesis and trigger dispatch, with the keeper deltas: the `client`
-//! capability is required, the videre interfaces remap onto the SDK
+//! dependency is required, the videre interfaces remap onto the SDK
 //! bindings, async handlers complete via `videre_sdk::client::poll_once`,
 //! and `ClientError` folds into the wire fault so `?` works in handlers.
 
@@ -8,9 +8,11 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{ImplItem, ItemImpl};
 
-/// The handler names recognised on a `#[keeper]` impl. The core trigger
-/// handlers mirror `#[module]`; `on_intent_status` is the videre one, and
-/// it rides the generic extension trigger.
+/// The handler names recognised on a `#[keeper]` impl. `init`,
+/// `on_block`, `on_event`, and `on_schedule` mirror `#[module]`.
+/// `on_intent_status` is the videre one: it replaces `#[module]`'s
+/// `on_extension`, because a keeper reads the extension trigger as an
+/// intent-status transition.
 const HANDLERS: [&str; 5] = [
     "init",
     "on_block",
@@ -19,10 +21,25 @@ const HANDLERS: [&str; 5] = [
     "on_intent_status",
 ];
 
-/// The manifest capability granting the client import.
+/// The handler names a keeper declared before the trigger vocabulary
+/// replaced the event one, each mapped to its replacement. A keeper still
+/// on an old name gets the rename rather than a bare refusal.
+const RETIRED_HANDLERS: [(&str, &str); 3] = [
+    (
+        "on_chain_logs",
+        "on_event, which takes one log and not a batch",
+    ),
+    ("on_tick", "on_schedule"),
+    (
+        "on_message",
+        "nothing, because the host messaging capability is retired",
+    ),
+];
+
+/// The manifest dependency granting the client import.
 const CLIENT_CAPABILITY: &str = "client";
 
-/// The import the `client` capability must map to.
+/// The import the `client` dependency must map to.
 const CLIENT_IMPORT: &str = "videre:venue/client@0.1.0";
 
 /// WIT packages the client import needs on the resolve path, in
@@ -60,11 +77,20 @@ pub(crate) fn expand(input: &ItemImpl) -> syn::Result<TokenStream> {
         if let ImplItem::Fn(f) = item {
             let name = f.sig.ident.to_string();
             if name.starts_with("on_") && !HANDLERS.contains(&name.as_str()) {
+                // A retired name is a rename, so say what replaced it
+                // rather than only that the name is unknown.
+                let hint = RETIRED_HANDLERS
+                    .iter()
+                    .find(|(retired, _)| *retired == name)
+                    .map_or_else(
+                        || "rename helpers so they do not start with `on_`".to_owned(),
+                        |(_, replacement)| format!("`{name}` is replaced by {replacement}"),
+                    );
                 return Err(syn::Error::new_spanned(
                     &f.sig.ident,
                     format!(
                         "`{name}` is not a recognised #[videre_sdk::keeper] handler; expected one \
-                         of {HANDLERS:?} (rename helpers so they do not start with `on_`)"
+                         of {HANDLERS:?} ({hint})"
                     ),
                 ));
             }
@@ -305,4 +331,55 @@ fn derive_keeper_world() -> Result<(Vec<String>, nexum_world::ModuleWorld), Stri
     let module_world = nexum_world::synthesize(&declared, &extensions)
         .map_err(|e| format!("{manifest_path}: {e}"))?;
     Ok((anchors, module_world))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Expand a keeper impl carrying one handler of the given name. The
+    /// handler-name check runs before any manifest read, so this reaches
+    /// the refusal without a `component.toml` on disk.
+    fn refusal(handler: &str) -> String {
+        let ident = syn::Ident::new(handler, proc_macro2::Span::call_site());
+        let input: ItemImpl = syn::parse_quote! {
+            impl Worker {
+                fn #ident(_payload: ()) -> Result<(), Fault> { Ok(()) }
+            }
+        };
+        expand(&input)
+            .expect_err("an unrecognised handler must refuse")
+            .to_string()
+    }
+
+    /// Every retired name maps to a live one, so the hint can never point
+    /// an author at a name the dispatch does not carry.
+    #[test]
+    fn retired_handlers_are_disjoint_from_the_live_set() {
+        for (retired, _) in RETIRED_HANDLERS {
+            assert!(!HANDLERS.contains(&retired), "{retired} is still live");
+        }
+    }
+
+    #[test]
+    fn a_retired_handler_names_its_replacement() {
+        assert!(refusal("on_tick").contains("`on_tick` is replaced by on_schedule"));
+        let logs = refusal("on_chain_logs");
+        assert!(
+            logs.contains("replaced by on_event, which takes one log"),
+            "message was: {logs}"
+        );
+        // Messaging is gone with no successor, so the hint says so.
+        assert!(refusal("on_message").contains("host messaging capability is retired"));
+    }
+
+    #[test]
+    fn an_unknown_handler_falls_back_to_the_prefix_advice() {
+        let err = refusal("on_nonesuch");
+        assert!(err.contains("is not a recognised"), "message was: {err}");
+        assert!(
+            err.contains("do not start with `on_`"),
+            "message was: {err}"
+        );
+    }
 }

@@ -25,7 +25,7 @@ A keeper module calls a registered venue through the `videre:venue/client` inter
 - `wit/`: the `videre:venue`, `videre:types`, and `videre:value-flow` WIT packages, plus the cross-repo deps vendored under `wit/deps/`.
 
 `extensions.toml` is the client-capability registry for this composition root: it declares the per-namespace rows that module world synthesis emits beyond the core `nexum:host` table.
-Its `client` row maps a `[capabilities]` declaration to the `videre:venue/client@0.1.0` import, and names the WIT packages that the resolve path needs.
+Its `client` row maps a `[dependencies]` declaration to the `videre:venue/client@0.1.0` import, and names the WIT packages that the resolve path needs.
 
 ## Build, test, lint
 

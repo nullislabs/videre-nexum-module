@@ -1,6 +1,6 @@
 # Extension capability registry for this composition root: the
 # per-namespace rows the module world synthesis emits beyond the core
-# nexum:host table. Each row names the WIT import a `[capabilities]`
+# nexum:host table. Each row names the WIT import a `[dependencies]`
 # declaration turns into and the package directories its resolve path
 # needs, in dependency order.
 

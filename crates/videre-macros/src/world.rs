@@ -7,9 +7,9 @@ pub use nexum_world::ModuleWorld;
 /// The conventional manifest file name a component declares itself in.
 pub const MANIFEST_FILE: &str = "component.toml";
 
-/// Capabilities a venue adapter may import: scoped transport only (chain,
-/// and HTTP via the SDK's wasi:http client). `local-store` and `logging`
-/// are refused.
+/// Capabilities a venue adapter may import: scoped transport only, so
+/// `chain` plus HTTP through the SDK's wasi:http client. `local-store`
+/// and `logging` are refused.
 const VENUE_CAPABILITIES: &[&str] = &["chain", "http"];
 
 /// Build the venue-adapter world from the declared capability names: exports
@@ -82,18 +82,22 @@ pub fn synthesize_venue(declared: &[String]) -> Result<ModuleWorld, String> {
 }
 
 /// The `[component] name` from a manifest text. `nexum-world` reads the
-/// dependency table only, so the name lives here.
+/// dependency table only, so the name lives here. Each refusal names one
+/// cause, and no refusal repeats the file name, because every caller
+/// prefixes the manifest path.
 pub fn manifest_name(text: &str) -> Result<String, String> {
-    let value: toml::Table = text
-        .parse()
-        .map_err(|e| format!("{MANIFEST_FILE} is not valid TOML: {e}"))?;
-    value
+    let value: toml::Table = text.parse().map_err(|e| format!("not valid TOML: {e}"))?;
+    let component = value
         .get("component")
-        .and_then(toml::Value::as_table)
-        .and_then(|component| component.get("name"))
-        .and_then(toml::Value::as_str)
+        .ok_or_else(|| "no [component] table".to_owned())?
+        .as_table()
+        .ok_or_else(|| "[component] must be a table".to_owned())?;
+    component
+        .get("name")
+        .ok_or_else(|| "[component] declares no `name`".to_owned())?
+        .as_str()
         .map(str::to_owned)
-        .ok_or_else(|| format!("[component] name must be a string in {MANIFEST_FILE}"))
+        .ok_or_else(|| "[component] name must be a string".to_owned())
 }
 
 #[cfg(test)]
@@ -170,15 +174,25 @@ mod tests {
         assert_eq!(manifest_name(text).unwrap(), "echo");
     }
 
+    /// Each refusal names its own cause, so an author reads which piece
+    /// of the manifest is wrong.
     #[test]
     fn manifest_name_refuses_a_missing_or_malformed_name() {
-        for text in ["", "[component]\n", "[component]\nname = 7\n"] {
-            let err = manifest_name(text).unwrap_err();
-            assert_eq!(
-                err, "[component] name must be a string in component.toml",
-                "text was: {text:?}"
-            );
+        for (text, expected) in [
+            ("", "no [component] table"),
+            ("component = 7\n", "[component] must be a table"),
+            ("[component]\n", "[component] declares no `name`"),
+            (
+                "[component]\nname = 7\n",
+                "[component] name must be a string",
+            ),
+        ] {
+            assert_eq!(manifest_name(text).unwrap_err(), expected, "text: {text:?}");
         }
-        assert!(manifest_name("=").unwrap_err().contains("not valid TOML"));
+        assert!(
+            manifest_name("=")
+                .unwrap_err()
+                .starts_with("not valid TOML")
+        );
     }
 }
