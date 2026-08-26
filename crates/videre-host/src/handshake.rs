@@ -3,15 +3,14 @@
 //! set it decodes, and a keeper boots only when every installed adapter
 //! decodes its version.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{anyhow, bail};
-use nexum_runtime::host::extension::ProviderManifest;
+use anyhow::anyhow;
 use nexum_runtime::manifest::ExtensionSections;
 use serde::Deserialize;
 use tracing::error;
 
-use crate::registry::VenueAdapterKind;
+use crate::registry::VenueId;
 
 /// The manifest section the videre platform claims.
 pub(crate) const SECTION: &str = "venue";
@@ -26,13 +25,6 @@ struct KeeperSection {
     body_version: u32,
 }
 
-/// Adapter-side `[venue]`: the body-schema versions it decodes.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AdapterSection {
-    body_versions: BTreeSet<u32>,
-}
-
 /// Parse one `[venue]` value as `S`, tagging failures with the owner.
 fn parse<S: for<'de> Deserialize<'de>>(owner: &str, value: &toml::Value) -> anyhow::Result<S> {
     value
@@ -41,88 +33,38 @@ fn parse<S: for<'de> Deserialize<'de>>(owner: &str, value: &toml::Value) -> anyh
         .map_err(|e| anyhow!("{owner} [venue]: {e}"))
 }
 
-/// Admit one provider: a present `[venue]` section must be the adapter
-/// shape with a non-empty version set. An absent section is admitted
-/// (opt-out).
-pub(crate) fn admit_provider(provider: &str, sections: &ExtensionSections) -> anyhow::Result<()> {
-    let Some(value) = sections.get(SECTION) else {
-        return Ok(());
-    };
-    let section: AdapterSection = parse(provider, value)?;
-    if section.body_versions.is_empty() {
-        bail!("{provider} [venue]: body_versions must not be empty");
-    }
-    Ok(())
-}
-
-/// An adapter's declared decode set: its `[venue] body_versions`, empty
-/// when the section is absent.
-pub(crate) fn declared_versions(
-    provider: &str,
-    sections: &ExtensionSections,
-) -> anyhow::Result<BTreeSet<u32>> {
-    let Some(value) = sections.get(SECTION) else {
-        return Ok(BTreeSet::new());
-    };
-    let section: AdapterSection = parse(provider, value)?;
-    Ok(section.body_versions)
-}
-
-/// Assert an adapter's `body-versions()` export equals its manifest claim,
-/// refusing the install on divergence.
-pub(crate) fn verify_exported_versions(
-    provider: &str,
-    declared: &BTreeSet<u32>,
-    exported: Vec<u32>,
-) -> anyhow::Result<()> {
-    let exported: BTreeSet<u32> = exported.into_iter().collect();
-    if exported != *declared {
-        bail!(
-            "{provider} exports body versions {exported:?}; the manifest [venue] \
-             body_versions declares {declared:?}"
-        );
-    }
-    Ok(())
-}
-
 /// Membership predicate: a worker declaring `[venue] body_version` is
-/// admitted only when every installed adapter's `body_versions` contains
-/// it, so one non-decoding adapter refuses the keeper. An absent section is
+/// admitted only when every registered venue's `body_versions` contains
+/// it, so one non-decoding venue refuses the keeper. An absent section is
 /// admitted (opt-out).
 pub(crate) fn admit_worker(
     worker: &str,
     sections: &ExtensionSections,
-    providers: &[ProviderManifest],
+    registered: &BTreeMap<VenueId, BTreeSet<u32>>,
 ) -> anyhow::Result<()> {
     let Some(value) = sections.get(SECTION) else {
         return Ok(());
     };
     let KeeperSection { body_version } = parse(worker, value)?;
-    let adapters: Vec<&ProviderManifest> = providers
+    // A venue registering an empty set has opted out of the handshake; it
+    // neither satisfies nor refuses a keeper.
+    let declaring: Vec<(&VenueId, &BTreeSet<u32>)> = registered
         .iter()
-        .filter(|p| p.kind == VenueAdapterKind::KIND)
+        .filter(|(_, versions)| !versions.is_empty())
         .collect();
-    if adapters.is_empty() {
+    if declaring.is_empty() {
         return Err(refuse(
             worker,
             body_version,
-            "no venue adapter declares [venue] body_versions",
+            "no registered venue declares [venue] body_versions",
         ));
     }
-    for provider in adapters {
-        let Some(value) = provider.sections.get(SECTION) else {
+    for (venue, versions) in declaring {
+        if !versions.contains(&body_version) {
             return Err(refuse(
                 worker,
                 body_version,
-                &format!("{} declares no [venue] body_versions", provider.name),
-            ));
-        };
-        let section: AdapterSection = parse(&provider.name, value)?;
-        if !section.body_versions.contains(&body_version) {
-            return Err(refuse(
-                worker,
-                body_version,
-                &format!("{} decodes {:?}", provider.name, section.body_versions),
+                &format!("{venue} decodes {versions:?}"),
             ));
         }
     }

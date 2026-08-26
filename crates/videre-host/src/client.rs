@@ -1,40 +1,63 @@
 //! `videre:venue/client`: the keeper-facing venue import. Every method
-//! resolves the shared [`VenueRegistry`] from the store's service map and
-//! delegates, metering against this store's module namespace. No registry
-//! service resolves every call to `unknown-venue`.
+//! resolves the shared [`VenueRegistry`] and delegates, metering against
+//! this store's module namespace. No published registry resolves every call
+//! to `unknown-venue`.
+//!
+//! The registry lives in a process-wide slot rather than in the store: the
+//! bindgen `add_to_linker` getter is a plain `fn` pointer that cannot
+//! capture, and `HostState` no longer carries the service map the runtime
+//! removed with the extension-installed component path. One composition
+//! root wires one [`Videre`](crate::Videre), so one slot is the whole
+//! process's registry.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
-use nexum_runtime::host::component::RuntimeTypes;
-use nexum_runtime::host::state::HostState;
+use nexum_runtime::component::RuntimeTypes;
+use nexum_runtime::extension::HostState;
 
 use crate::bindings::client::Host;
 use crate::bindings::{IntentStatus, Quotation, SubmitOutcome, VenueError};
 use crate::registry::{VenueId, VenueRegistry};
 
-/// The registry published under the videre service namespace.
-fn registry<T: RuntimeTypes>(state: &HostState<T>) -> Result<Arc<VenueRegistry>, VenueError> {
-    state
-        .services
-        .get::<VenueRegistry>(VenueRegistry::NAMESPACE)
-        .ok_or(VenueError::UnknownVenue)
+/// The process-wide registry, published at link time.
+static REGISTRY: OnceLock<Arc<VenueRegistry>> = OnceLock::new();
+
+/// Publish the registry the client glue delegates to. The first publish
+/// wins; a second is ignored, so wiring two platforms in one process keeps
+/// the first rather than tearing a live registry out from under a store.
+pub(crate) fn publish_registry(registry: Arc<VenueRegistry>) {
+    let _ = REGISTRY.set(registry);
+}
+
+/// Drop the published registry. Test-only: `OnceLock` has no stable reset,
+/// so this is a no-op placeholder that documents the constraint. Tests
+/// wanting registry isolation should exercise [`VenueRegistry`] directly
+/// rather than through the glue.
+#[cfg(test)]
+pub(crate) fn published() -> Option<&'static Arc<VenueRegistry>> {
+    REGISTRY.get()
+}
+
+/// The registry published for this process.
+fn registry() -> Result<&'static Arc<VenueRegistry>, VenueError> {
+    REGISTRY.get().ok_or(VenueError::UnknownVenue)
 }
 
 impl<T: RuntimeTypes> Host for HostState<T> {
     async fn quote(&mut self, venue: String, body: Vec<u8>) -> Result<Quotation, VenueError> {
-        registry(self)?
-            .quote(&self.run.module, &VenueId::from(venue), body)
+        registry()?
+            .quote(self.run.module.as_str(), &VenueId::from(venue), body)
             .await
     }
 
     async fn submit(&mut self, venue: String, body: Vec<u8>) -> Result<SubmitOutcome, VenueError> {
-        registry(self)?
-            .submit(&self.run.module, &VenueId::from(venue), body)
+        registry()?
+            .submit(self.run.module.as_str(), &VenueId::from(venue), body)
             .await
     }
 
     async fn observe(&mut self, venue: String, receipt: Vec<u8>) -> Result<(), VenueError> {
-        registry(self)?.observe(&VenueId::from(venue), receipt)
+        registry()?.observe(&VenueId::from(venue), receipt)
     }
 
     async fn status(
@@ -42,10 +65,10 @@ impl<T: RuntimeTypes> Host for HostState<T> {
         venue: String,
         receipt: Vec<u8>,
     ) -> Result<IntentStatus, VenueError> {
-        registry(self)?.status(&VenueId::from(venue), receipt).await
+        registry()?.status(&VenueId::from(venue), receipt).await
     }
 
     async fn cancel(&mut self, venue: String, receipt: Vec<u8>) -> Result<(), VenueError> {
-        registry(self)?.cancel(&VenueId::from(venue), receipt).await
+        registry()?.cancel(&VenueId::from(venue), receipt).await
     }
 }

@@ -4,30 +4,31 @@
 //! remaps the `videre` types onto the adapter bindgen, so one Rust type
 //! serves both faces. `PartialEq` is derived for polled-status comparison.
 
-/// The provider face: the `videre:venue/venue-adapter` world. Imports the
-/// scoped transport (chain, messaging; HTTP is wasi:http) and exports the
-/// `videre:venue/adapter` face plus `init`.
+/// The shared intent ontology: `videre:types` and `videre:value-flow`, the
+/// two type-only packages a venue and a keeper both speak.
+///
+/// This was the `videre:venue/venue-adapter` guest world until venues became
+/// native Rust. The host no longer instantiates an adapter component, so it
+/// binds the types alone; the guest world lives on in `videre-sdk` for an
+/// out-of-process adapter. `PartialEq` is derived for polled-status
+/// comparison.
 mod venue_adapter {
     wasmtime::component::bindgen!({
+        inline: "
+            package videre:type-host;
+            world type-host {
+                import videre:types/types@0.1.0;
+                import videre:value-flow/types@0.1.0;
+            }
+        ",
         path: [
             "../../wit/videre-value-flow",
             "../../wit/videre-types",
-            "../../wit/deps/nexum-host",
-            "../../wit/videre-venue",
         ],
-        world: "videre:venue/venue-adapter",
         imports: { default: async },
-        exports: { default: async },
-        with: {
-            "nexum:host/types": nexum_runtime::bindings::nexum::host::types,
-            "nexum:host/chain": nexum_runtime::bindings::nexum::host::chain,
-            "nexum:host/messaging": nexum_runtime::bindings::nexum::host::messaging,
-        },
         additional_derives: [PartialEq],
     });
 }
-
-pub use venue_adapter::VenueAdapter;
 
 /// The keeper-facing `videre:venue/client` import bound host-side. Reuses
 /// the adapter bindings' videre types via `with`, so a module and an adapter

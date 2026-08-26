@@ -8,37 +8,27 @@
 //! quota gates every quote and submit; a decode failure is charged to the
 //! calling module, so a caller feeding garbage exhausts its own budget.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::fmt;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, anyhow};
-use async_trait::async_trait;
 use futures::future::BoxFuture;
-use nexum_runtime::bindings::nexum;
-use nexum_runtime::engine_config::{SubmitQuota, WatchLimit};
-use nexum_runtime::host::actor::{ActorFault, ActorSlot, Liveness, SupervisedStore};
-use nexum_runtime::host::component::RuntimeTypes;
-use nexum_runtime::host::extension::{
-    HostService, Installed, ProviderInstance, ProviderKind, downcast_service,
-};
-use nexum_runtime::host::state::HostState;
 use tokio::sync::Mutex as AsyncMutex;
-use tracing::{info, warn};
+use tracing::warn;
 use videre_status_body::StatusBody;
-use wasmtime::Store;
-use wasmtime::component::HasSelf;
+
+use crate::policy::{Liveness, SubmitQuota, WatchLimit};
 
 /// Status transition carried in the `custom` event payload.
 pub use videre_status_body::IntentStatusUpdate;
 
 use crate::bindings::{
-    IntentHeader, IntentStatus, Quotation, RateLimit, SubmitOutcome, VenueAdapter, VenueError,
+    IntentHeader, IntentStatus, Quotation, RateLimit, SubmitOutcome, VenueError,
 };
 
 /// Venue identifier an adapter registers under. Opaque beyond equality.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct VenueId(String);
 
 impl VenueId {
@@ -122,94 +112,8 @@ pub trait VenueInvoker: Send {
     fn cancel(&mut self, receipt: Vec<u8>) -> BoxFuture<'_, Result<(), VenueError>>;
 }
 
-/// Live adapter: a [`SupervisedStore`] plus its `venue-adapter` bindings.
-/// A guest trap is projected onto `unavailable`, never propagated.
-pub struct VenueActor<T: RuntimeTypes> {
-    actor: SupervisedStore<T>,
-    bindings: VenueAdapter,
-}
-
-impl<T: RuntimeTypes> VenueActor<T> {
-    /// Wrap an instantiated adapter store for routing, reporting traps on
-    /// the shared `liveness`.
-    pub fn new(
-        store: Store<HostState<T>>,
-        bindings: VenueAdapter,
-        fuel_per_call: u64,
-        liveness: Liveness,
-    ) -> Self {
-        Self {
-            actor: SupervisedStore::new(store, fuel_per_call, liveness),
-            bindings,
-        }
-    }
-}
-
-/// Project an actor fault onto `unavailable`, carrying the root cause only.
-fn venue_fault(fault: ActorFault) -> VenueError {
-    VenueError::Unavailable(format!("adapter {fault}"))
-}
-
-impl<T: RuntimeTypes> VenueInvoker for VenueActor<T> {
-    fn derive_header<'a>(
-        &'a mut self,
-        body: &'a [u8],
-    ) -> BoxFuture<'a, Result<IntentHeader, VenueError>> {
-        Box::pin(async move {
-            let adapter = self.bindings.videre_venue_adapter();
-            self.actor
-                .call(async |store| adapter.call_derive_header(store, body).await)
-                .await
-                .map_err(venue_fault)?
-        })
-    }
-
-    fn quote<'a>(&'a mut self, body: &'a [u8]) -> BoxFuture<'a, Result<Quotation, VenueError>> {
-        Box::pin(async move {
-            let adapter = self.bindings.videre_venue_adapter();
-            self.actor
-                .call(async |store| adapter.call_quote(store, body).await)
-                .await
-                .map_err(venue_fault)?
-        })
-    }
-
-    fn submit<'a>(
-        &'a mut self,
-        body: &'a [u8],
-    ) -> BoxFuture<'a, Result<SubmitOutcome, VenueError>> {
-        Box::pin(async move {
-            let adapter = self.bindings.videre_venue_adapter();
-            self.actor
-                .call(async |store| adapter.call_submit(store, body).await)
-                .await
-                .map_err(venue_fault)?
-        })
-    }
-
-    fn status(&mut self, receipt: Vec<u8>) -> BoxFuture<'_, Result<IntentStatus, VenueError>> {
-        Box::pin(async move {
-            let adapter = self.bindings.videre_venue_adapter();
-            self.actor
-                .call(async |store| adapter.call_status(store, &receipt).await)
-                .await
-                .map_err(venue_fault)?
-        })
-    }
-
-    fn cancel(&mut self, receipt: Vec<u8>) -> BoxFuture<'_, Result<(), VenueError>> {
-        Box::pin(async move {
-            let adapter = self.bindings.videre_venue_adapter();
-            self.actor
-                .call(async |store| adapter.call_cancel(store, &receipt).await)
-                .await
-                .map_err(venue_fault)?
-        })
-    }
-}
-
 /// One installed adapter behind its serialising slot.
-type AdapterSlot = ActorSlot<dyn VenueInvoker>;
+type AdapterSlot = Arc<AsyncMutex<dyn VenueInvoker>>;
 
 /// One installed venue: adapter slot plus shared liveness. A dead entry
 /// stays installed, resolving to `unavailable` (not `unknown-venue`) until
@@ -217,6 +121,9 @@ type AdapterSlot = ActorSlot<dyn VenueInvoker>;
 struct InstalledVenue {
     slot: AdapterSlot,
     liveness: Liveness,
+    /// The body-schema versions this venue decodes, the authority the
+    /// keeper handshake reads.
+    body_versions: BTreeSet<u32>,
 }
 
 /// Per-caller charge history, pruned to the quota window on each touch.
@@ -283,20 +190,18 @@ pub struct VenueRegistry {
     inner: Arc<VenueRegistryInner>,
 }
 
-/// The registry is the venue-routing host service.
-impl HostService for VenueRegistry {}
-
 impl VenueRegistry {
     /// Service namespace: the videre extension's.
     pub const NAMESPACE: &'static str = "videre";
 
-    /// Install an adapter under its venue id, sharing `liveness`. Rejects a
-    /// duplicate id while the incumbent is alive; replaces a dead incumbent
-    /// (the sweep restarting a trapped adapter).
-    pub(crate) fn install(
+    /// Register a venue under its id, sharing `liveness`. Rejects a
+    /// duplicate id while the incumbent is alive; replaces a dead incumbent.
+    /// The composition root calls this before launch.
+    pub fn register(
         &self,
         venue: VenueId,
         liveness: Liveness,
+        body_versions: BTreeSet<u32>,
         invoker: impl VenueInvoker + 'static,
     ) -> Result<(), DuplicateVenue> {
         // Takes the adapter-map mutex only for the synchronous insert; never
@@ -310,6 +215,7 @@ impl VenueRegistry {
             InstalledVenue {
                 slot: Arc::new(AsyncMutex::new(invoker)),
                 liveness,
+                body_versions,
             },
         );
         Ok(())
@@ -323,7 +229,20 @@ impl VenueRegistry {
         liveness: Liveness,
         invoker: impl VenueInvoker + 'static,
     ) -> Result<(), DuplicateVenue> {
-        self.install(venue, liveness, invoker)
+        self.register(venue, liveness, BTreeSet::new(), invoker)
+    }
+
+    /// Every registered venue's declared body-version set, the input to the
+    /// keeper handshake in [`crate::Videre::admit_worker`].
+    #[must_use]
+    pub fn body_versions(&self) -> BTreeMap<VenueId, BTreeSet<u32>> {
+        self.inner
+            .adapters
+            .lock()
+            .expect("adapter map poisoned")
+            .iter()
+            .map(|(venue, installed)| (venue.clone(), installed.body_versions.clone()))
+            .collect()
     }
 
     /// Resolve a venue id to its slot: uninstalled is `unknown-venue`,
@@ -621,98 +540,6 @@ impl VenueRegistry {
     }
 }
 
-/// Provider kind that boots a `videre:venue/venue-adapter` component and
-/// installs its actor in the registry.
-pub struct VenueAdapterKind;
-
-impl VenueAdapterKind {
-    /// The manifest kind spelling.
-    pub const KIND: &'static str = "venue-adapter";
-}
-
-#[async_trait]
-impl<T: RuntimeTypes> ProviderKind<T> for VenueAdapterKind {
-    fn kind(&self) -> &'static str {
-        Self::KIND
-    }
-
-    fn link(&self, linker: &mut wasmtime::component::Linker<HostState<T>>) -> anyhow::Result<()> {
-        // The scoped transport only; the WASI base is the host's, and the
-        // withheld core interfaces fail instantiation.
-        nexum::host::chain::add_to_linker::<HostState<T>, HasSelf<HostState<T>>>(linker, |s| s)?;
-        nexum::host::messaging::add_to_linker::<HostState<T>, HasSelf<HostState<T>>>(
-            linker,
-            |s| s,
-        )?;
-        Ok(())
-    }
-
-    async fn install(
-        &self,
-        instance: ProviderInstance<'_, T>,
-        service: &Arc<dyn HostService>,
-    ) -> anyhow::Result<Installed> {
-        let registry = downcast_service::<VenueRegistry>(service)
-            .ok_or_else(|| anyhow!("the venue-adapter kind requires the venue-registry service"))?;
-        let ProviderInstance {
-            component,
-            linker,
-            mut store,
-            config,
-            sections,
-            fuel_per_call,
-            liveness,
-        } = instance;
-        let bindings = VenueAdapter::instantiate_async(&mut store, component, linker)
-            .await
-            .map_err(anyhow::Error::from)
-            .context("instantiate adapter")?;
-        // The venue id is the adapter's namespace: its manifest name.
-        let venue_id = VenueId::from(&*store.data().run.module);
-        // The manifest `[venue] body_versions` is the install-time
-        // authority the keeper handshake reads; the export must agree,
-        // so a manifest claiming versions the code does not decode never
-        // installs.
-        let declared = crate::handshake::declared_versions(venue_id.as_str(), sections)?;
-        let exported = bindings
-            .videre_venue_adapter()
-            .call_body_versions(&mut store)
-            .await
-            .map_err(anyhow::Error::from)
-            .context("read adapter body-versions")?;
-        // Post-instantiation, pre-init: an export cannot be called before
-        // instantiating, so unlike the pre-compile manifest-section
-        // predicates in `supervisor.rs` a buggy or malicious adapter fully
-        // instantiates, running any instantiation side effects, before this
-        // divergence check catches the mismatch.
-        crate::handshake::verify_exported_versions(venue_id.as_str(), &declared, exported)?;
-        match bindings
-            .call_init(&mut store, &config)
-            .await
-            .map_err(anyhow::Error::from)?
-        {
-            Ok(()) => info!(adapter = %venue_id, "adapter init succeeded"),
-            Err(e) => {
-                warn!(
-                    adapter = %venue_id,
-                    kind = nexum_runtime::host::error::fault_label(&e),
-                    fault = %nexum_runtime::host::error::fault_message(&e),
-                    "adapter init failed - loaded but marked dead",
-                );
-                return Ok(Installed::Dead);
-            }
-        }
-        registry
-            .install(
-                venue_id.clone(),
-                liveness.clone(),
-                VenueActor::new(store, bindings, fuel_per_call, liveness),
-            )
-            .with_context(|| format!("install adapter {venue_id}"))?;
-        Ok(Installed::Live)
-    }
-}
-
 /// A quota window as whole milliseconds, saturating at `u64::MAX`.
 fn window_ms(window: Duration) -> u64 {
     u64::try_from(window.as_millis()).unwrap_or(u64::MAX)
@@ -816,7 +643,7 @@ mod tests {
 
     use crate::bindings::value_flow::{Asset, AssetAmount};
     use crate::bindings::{AuthScheme, IntentHeader, Settlement, UnsignedTx};
-    use nexum_runtime::engine_config::WATCH_GRACE_MAX;
+    use crate::policy::WATCH_GRACE_MAX;
 
     use super::*;
 

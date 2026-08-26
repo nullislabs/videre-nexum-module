@@ -34,14 +34,13 @@ interface adapter {
 }
 
 /// A venue adapter component: the provider face over scoped transport only.
-/// No local-store, remote-store, identity, or logging import, so an adapter
-/// structurally cannot touch host key material or persistent state. Outbound
-/// HTTP is wasi:http, linked separately and allowlisted per adapter.
+/// No local-store or logging import, so an adapter structurally cannot touch
+/// host key material or persistent state. Outbound HTTP is wasi:http, linked
+/// separately and allowlisted per adapter.
 world venue-adapter {
     use nexum:host/types@0.1.0.{config, fault};
 
     import nexum:host/chain@0.1.0;
-    import nexum:host/messaging@0.1.0;
 
     /// Configure the adapter from its `[config]` before any submission.
     export init: func(config: config) -> result<_, fault>;
