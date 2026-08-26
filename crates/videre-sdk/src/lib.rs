@@ -40,14 +40,16 @@ pub use keeper::{
 /// Derive [`IntentBody`] on the outer per-venue version enum.
 pub use videre_macros::IntentBody;
 /// Keeper authoring path. Apply to a handler impl: emits the per-cdylib
-/// bindgen for a `module.toml`-derived world, drives a [`VenueClient`]
-/// with shared type identity, dispatches events (async ones through
+/// bindgen for a `component.toml`-derived world, drives a [`VenueClient`]
+/// with shared type identity, dispatches triggers (async ones through
 /// [`client::poll_once`]), and folds [`ClientError`] into the wire fault
 /// so `?` works in handlers.
 pub use videre_macros::keeper;
-/// Venue authoring path. Apply to the `impl VenueAdapter for MyVenue`
-/// block: emits the per-cdylib bindgen for a `module.toml`-derived world,
-/// the `videre:venue/adapter` export glue, and `export!`.
+/// Venue authoring path for an out-of-process adapter component. Apply to
+/// the `impl VenueAdapter for MyVenue` block: emits the per-cdylib bindgen
+/// for a `component.toml`-derived world, the `videre:venue/adapter` export
+/// glue, and `export!`. An in-process venue is a native Rust
+/// `videre_host::VenueInvoker` and does not use this path.
 pub use videre_macros::venue;
 
 /// The intent ontology the [`VenueAdapter`] face and client core speak.
