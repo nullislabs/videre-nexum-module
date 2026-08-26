@@ -629,8 +629,14 @@ impl VenueRegistryBuilder {
             // misconfigured bound still tracks a single receipt.
             warn!("watch limit max_entries is 0; clamping to 1");
         }
-        let watch_limit =
-            WatchLimit::new(self.watch_limit.max_entries.max(1), self.watch_limit.expiry);
+        // Clamp only `max_entries`. `WatchLimit::new` would re-derive
+        // `grace` from `expiry` and silently discard an explicit one, which
+        // made `WatchLimit::with_grace` a no-op through this builder.
+        let watch_limit = WatchLimit::with_grace(
+            self.watch_limit.max_entries.max(1),
+            self.watch_limit.expiry,
+            self.watch_limit.grace,
+        );
         VenueRegistry {
             inner: Arc::new(VenueRegistryInner {
                 adapters: Mutex::new(HashMap::new()),
@@ -1646,6 +1652,24 @@ mod tests {
             WatchLimit::with_grace(8, Duration::from_secs(900), Duration::from_secs(60)).grace,
             Duration::from_secs(60),
         );
+    }
+
+    #[test]
+    fn the_builder_keeps_an_explicit_grace_while_clamping_the_entry_cap() {
+        // Regression: `build` used to rebuild the limit with
+        // `WatchLimit::new`, which re-derives `grace` from `expiry`, so an
+        // explicit grace never reached the registry.
+        let registry = VenueRegistryBuilder::new(SubmitQuota::default())
+            .with_watch_limit(WatchLimit::with_grace(
+                0,
+                Duration::from_secs(900),
+                Duration::from_secs(60),
+            ))
+            .build();
+        let limit = registry.inner.watch_limit;
+        assert_eq!(limit.grace, Duration::from_secs(60), "explicit grace kept");
+        assert_eq!(limit.max_entries, 1, "a zero entry cap still clamps to 1");
+        assert_eq!(limit.expiry, Duration::from_secs(900));
     }
 
     /// Read the sole watch entry's give-up deadline.
