@@ -1,11 +1,11 @@
-//! # echo-client (reference Shepherd intent module)
+//! # echo-client (reference videre intent module)
 //!
-//! The keeper half of the echo pair. On every chain-1 block it quotes
+//! The raw-import half of the echo pair. On every chain-1 block it quotes
 //! and submits an opaque body through the raw `videre:venue/client`
 //! import to the `echo-venue` adapter, logs the receipt, and logs each
 //! `intent-status` transition the registry fans back. The smallest
 //! demonstration of the intent core: module -> registry -> adapter and
-//! the status event back.
+//! the status trigger back.
 
 // wit_bindgen::generate! expands to host-import shims whose arity matches
 // the WIT signatures, which can exceed clippy's too-many-arguments threshold.
@@ -63,11 +63,11 @@ impl EchoClient {
         Ok(())
     }
 
-    fn on_custom(event: types::CustomEvent) -> Result<(), Fault> {
-        if event.kind != videre_sdk::status_body::INTENT_STATUS_KIND {
+    fn on_extension(trigger: types::ExtensionTrigger) -> Result<(), Fault> {
+        if trigger.extension_kind != videre_sdk::status_body::INTENT_STATUS_KIND {
             return Ok(());
         }
-        let update = videre_sdk::status_body::IntentStatusUpdate::decode(&event.payload)
+        let update = videre_sdk::status_body::IntentStatusUpdate::decode(&trigger.payload)
             .map_err(|err| Fault::InvalidInput(err.to_string()))?;
         let body = videre_sdk::status_body::StatusBody::decode(&update.status)
             .map_err(|err| Fault::InvalidInput(err.to_string()))?;
