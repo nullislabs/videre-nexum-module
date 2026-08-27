@@ -19,7 +19,8 @@ Read a document below as a design record, not as a description of the code that 
 
 Each document carries a provenance header.
 Read that header first, because crate names, WIT package names, and file paths changed at the carve.
-The header also lists the claims that a later change made false.
+The header also lists the load-bearing claims that a later change made false.
+It is not exhaustive: assume any name in a document body is pre-carve until the live tree confirms it.
 Bare issue and PR numbers in these documents refer to the pre-carve nullislabs/shepherd tracker.
 
 ## One claim that all three documents get wrong
@@ -33,4 +34,5 @@ A keeper stays a guest wasm component, and it still reaches a venue through `vid
 
 ## Landing places
 
-The wit-deps re-vendor and freeze runbook (tracker issue #45) lands here.
+The wit-deps re-vendor and freeze runbook (tracker issue #22) lands here.
+Tracker issue #45 is a hard precondition for it: the digests in `wit/deps.toml` are placeholders until #45 records the real ones.

@@ -12,8 +12,12 @@
 > The `adapter` interface still exists in `wit/videre-venue/venue.wit`, but the host now runs a venue in process.
 > A venue is a native Rust adapter that implements `VenueInvoker` from `videre-host`, and the composition root registers it with `VenueRegistry::register`.
 > The `venue-adapter` world therefore serves only an out-of-process adapter component.
-> §4 says the host event carries the opaque status body; the runtime renamed an event to a trigger.
-> The `videre-status-body` crate is the live codec for that body, and it is authoritative over §4.
+> §4 ends by putting an `intent-status-update` record in the host `types.wit`.
+> That record left `nexum:host` entirely; the package now carries a generic `extension-trigger` and a `trigger` variant, and neither names an intent.
+> The update rides that generic extension trigger as an opaque payload, under the `intent-status` extension kind.
+> The `videre-status-body` crate owns both halves: an envelope tag over `{venue, receipt, status}`, and the status body itself.
+> There are two independent version tags now, not one.
+> The §4 body layout is still accurate: the tag leads, then the status, then the optional proof and reason.
 > §5 maps `AdapterActor` to `VenueActor`; no `VenueActor` survives, because the host no longer supervises a venue component.
 
 The byte-exact target the M1 contract fold (#366) rewrites to, and the oracle

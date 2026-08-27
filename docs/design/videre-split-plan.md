@@ -11,11 +11,23 @@
 > This plan makes a venue a guest wasm component of kind `venue-adapter` that the host installs and supervises (§2.3, §2.5, §3.4, §4.1, §7.1, §7.2, §8).
 > A venue is now a native Rust adapter that implements `VenueInvoker` from `videre-host`, and the composition root registers it with `VenueRegistry::register`.
 > The runtime deleted the extension-installed component path, so an extension can no longer install or supervise a guest.
-> `ProviderKind` and the `venue-adapter` provider kind in §7.2 are therefore gone from the live seam.
 > A keeper stays a guest wasm component, and it still reaches a venue through `videre:venue/client`.
+> The whole §7.2 seam sketch is retired, not only its provider half.
+> `ProviderKind`, `HostService`, `Extension::service`, `Extension::provider`, and the `HostState.services` typed map of §8 S1.1 have no live counterpart.
+> `HostState` carries no service map at all, so `videre-host` reaches its registry through a process-wide slot.
+> The live `Extension` trait is `namespace`, `capabilities`, `link`, `manifest_sections`, `admit_worker`, `emits_trigger_kinds`, and `open_sources`.
+> The install predicate of §2.2 and §3.3 is retired with it.
+> Its live equivalent is `Extension::admit_worker`, and it works the other way round: it is a keeper-side check that reads the keeper's `[venue] body_version` and admits the keeper only when every already-registered venue decodes that version.
+> It is not an adapter install gate, because the host no longer installs an adapter.
 > §2.1 and §2.4 name the layer-3 repo `CoW-on-videre`; the carve named it `shepherd`.
 > `videre:intent` landed as `videre:types` plus `videre:venue`, which §8 P0.2 already anticipates; read every `videre:intent` and `videre:adapter` mention that way.
 > The live wiring call is `builder.with_extensions([Arc::new(videre_host::platform())])`, not the `with_extension` of §7.2.
+>
+> Renames to read through, wherever the body uses the old name:
+> the `event-module` world is `trigger-module`, and an event subscription is a `[[trigger]]` row keyed by `on`.
+> `module.toml` is `component.toml`, and its `capabilities = [...]` is `[dependencies]`.
+> `nexum:host` kept only `chain`, `local-store`, and `logging`; the `messaging`, `identity`, and `remote-store` interfaces this plan names are deleted.
+>
 > Read `AGENTS.md` for the live seam.
 
 **Splitting `nullislabs/shepherd` (`dev/m1` @ `ddfb2b9`, design-doc baseline `aed942c`) into three repos: `nexum-runtime` ← `videre` ← `CoW-on-videre`.**
