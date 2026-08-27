@@ -48,11 +48,11 @@ pub struct Keeper<S, P> {
 impl<S, P> Keeper<S, P> {
     /// Bind a source to the venue id its submissions route to. The
     /// reconcile budget defaults to [`DEFAULT_RECONCILE_BUDGET`].
-    pub fn new(source: S, venues: P, venue: impl Into<VenueId>) -> Self {
+    pub fn new(source: S, venues: P, venue: VenueId) -> Self {
         Self {
             source,
             venues,
-            venue: venue.into(),
+            venue,
             max_per_tick: DEFAULT_RECONCILE_BUDGET,
         }
     }
@@ -466,7 +466,7 @@ mod tests {
     }
 
     fn keeper(outcome: Outcome, venue: &StubVenue) -> Keeper<StubSource, &StubVenue> {
-        Keeper::new(StubSource(outcome), venue, "stub")
+        Keeper::new(StubSource(outcome), venue, VenueId::from_static("stub"))
     }
 
     #[test]
@@ -545,7 +545,7 @@ mod tests {
             Outcome::Submit(b"two".to_vec()),
             Outcome::Submit(b"one".to_vec()),
         ]));
-        let keeper = Keeper::new(source, &venue, "stub");
+        let keeper = Keeper::new(source, &venue, VenueId::from_static("stub"));
 
         assert_eq!(
             run(keeper.run(&host, &TICK))
@@ -933,7 +933,11 @@ mod tests {
     /// A keeper whose source never submits: exercises the reconcile pass
     /// alone.
     fn idle_keeper(venue: &CountingVenue) -> Keeper<StubSource, &CountingVenue> {
-        Keeper::new(StubSource(Outcome::WaitBlock), venue, STUB)
+        Keeper::new(
+            StubSource(Outcome::WaitBlock),
+            venue,
+            VenueId::from_static(STUB),
+        )
     }
 
     fn mark(host: &impl nexum_sdk::host::LocalStoreHost, body: &[u8]) -> Option<Mark> {
@@ -947,7 +951,11 @@ mod tests {
         let host = MockLocalStore::default();
         put_commitment(&host);
         let venue = CountingVenue::accepting();
-        let keeper = Keeper::new(StubSource(Outcome::Submit(b"body".to_vec())), &venue, STUB);
+        let keeper = Keeper::new(
+            StubSource(Outcome::Submit(b"body".to_vec())),
+            &venue,
+            VenueId::from_static(STUB),
+        );
 
         // Tick A: None -> reserve -> Accepted -> commit.
         let report = run(keeper.run(&host, &TICK)).expect("keeper runs");
@@ -983,7 +991,11 @@ mod tests {
             .put(&Address::ZERO, &B256::ZERO, b"params")
             .expect("commitment writes");
         let venue = CountingVenue::accepting();
-        let keeper = Keeper::new(StubSource(Outcome::Submit(b"order".to_vec())), &venue, STUB);
+        let keeper = Keeper::new(
+            StubSource(Outcome::Submit(b"order".to_vec())),
+            &venue,
+            VenueId::from_static(STUB),
+        );
 
         // Tick A: venue accepts (POST #1) but the commit write faults; the
         // RESERVED marker persists, no release runs.
@@ -1116,8 +1128,12 @@ mod tests {
         }
         put_commitment(&host);
         let venue = CountingVenue::accepting();
-        let keeper = Keeper::new(StubSource(Outcome::Submit(b"fresh".to_vec())), &venue, STUB)
-            .with_reconcile_budget(2);
+        let keeper = Keeper::new(
+            StubSource(Outcome::Submit(b"fresh".to_vec())),
+            &venue,
+            VenueId::from_static(STUB),
+        )
+        .with_reconcile_budget(2);
 
         // At most two orphans reconciled, yet the fresh commitment still
         // submits its own order this tick.
@@ -1172,7 +1188,11 @@ mod tests {
             .put(&Address::ZERO, &B256::ZERO, b"params")
             .expect("commitment writes");
         let venue = CountingVenue::accepting();
-        let keeper = Keeper::new(StubSource(Outcome::Submit(b"order".to_vec())), &venue, STUB);
+        let keeper = Keeper::new(
+            StubSource(Outcome::Submit(b"order".to_vec())),
+            &venue,
+            VenueId::from_static(STUB),
+        );
 
         // The faulted commit is a proxy for a crash between submit and
         // commit: the marker MUST be RESERVED, never released to None.
@@ -1201,7 +1221,11 @@ mod tests {
         CommitmentSet::new(&host)
             .put(&Address::ZERO, &B256::ZERO, b"params")
             .expect("commitment writes");
-        let keeper = Keeper::new(StubSource(Outcome::Submit(b"order".to_vec())), venue, STUB);
+        let keeper = Keeper::new(
+            StubSource(Outcome::Submit(b"order".to_vec())),
+            venue,
+            VenueId::from_static(STUB),
+        );
         (host, keeper)
     }
 

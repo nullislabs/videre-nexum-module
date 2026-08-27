@@ -27,8 +27,9 @@ use crate::bindings::{
 };
 
 /// Venue identifier an adapter registers under. Opaque beyond equality,
-/// never empty or whitespace-only: the field is private and [`VenueId::new`]
-/// is the only constructor, so every id in the process is validated.
+/// never empty or whitespace-padded: the field is private and
+/// [`VenueId::new`] is the only constructor, so every id in the process is
+/// validated.
 /// `Ord` is derived so the registry can key a `BTreeMap` on it.
 #[derive(
     Clone,
@@ -46,14 +47,17 @@ pub struct VenueId(#[as_ref(str)] String);
 
 /// A candidate venue id failed validation at a boundary.
 #[derive(Debug, thiserror::Error)]
-#[error("venue id must not be empty or whitespace-only (got {0:?})")]
+#[error("venue id must not be empty or whitespace-padded (got {0:?})")]
 pub struct InvalidVenueId(String);
 
 impl VenueId {
-    /// Validating constructor: rejects empty or whitespace-only input.
+    /// Validating constructor: rejects empty input and surrounding
+    /// whitespace. A padded id is rejected, never trimmed: a trim would
+    /// collapse two spellings into one id. Interior whitespace stays
+    /// legal.
     pub fn new(id: impl Into<String>) -> Result<Self, InvalidVenueId> {
         let id = id.into();
-        if id.trim().is_empty() {
+        if id.is_empty() || id.trim().len() != id.len() {
             return Err(InvalidVenueId(id));
         }
         Ok(Self(id))
@@ -1183,6 +1187,18 @@ mod tests {
         assert_eq!(VenueId::new("cow").expect("constructs").to_string(), "cow");
         // The derived accessor is `AsRef<str>`, matching the SDK id.
         assert_eq!(AsRef::<str>::as_ref(&cow()), "cow");
+    }
+
+    #[test]
+    fn padded_venue_id_is_rejected_at_construction() {
+        assert!("cow ".parse::<VenueId>().is_err());
+        assert!(" cow".parse::<VenueId>().is_err());
+        assert!(VenueId::new("cow\n").is_err());
+        assert!(VenueId::new("\tcow").is_err());
+        assert!(VenueId::new("cow\u{a0}").is_err());
+        // Interior whitespace is not surrounding: reject-not-trim keeps the
+        // spelling exact and never rewrites it.
+        assert!(VenueId::new("cow venue").is_ok());
     }
 
     #[test]
