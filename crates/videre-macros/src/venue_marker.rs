@@ -101,10 +101,8 @@ pub fn expand(attr: TokenStream, input: &ItemImpl) -> Result<TokenStream, syn::E
     })
 }
 
-/// Reject an empty or whitespace-padded id literal at expansion, before
-/// the manifest comparison. The registry refuses such an id at
-/// registration, so the marker fails at the earliest surface with a
-/// spelled-out error.
+/// Reject an empty or whitespace-padded id literal at expansion, so the
+/// error lands before the manifest comparison.
 fn id_shape_check(id: &LitStr) -> Result<(), syn::Error> {
     let value = id.value();
     if value.is_empty() || value.trim().len() != value.len() {
@@ -163,8 +161,7 @@ mod tests {
         assert!(id_error("demo\u{a0}").is_some());
         assert!(id_error("").is_some());
         assert_eq!(id_error("demo"), None);
-        // `:` stays legal for the future chain-qualified shape, and
-        // interior whitespace is not surrounding whitespace.
+        // `:` stays legal for the future chain-qualified shape.
         assert_eq!(id_error("demo:11155111"), None);
         assert_eq!(id_error("demo venue"), None);
     }

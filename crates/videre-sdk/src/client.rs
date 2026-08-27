@@ -18,9 +18,8 @@ use crate::bindings::videre::venue::client as shims;
 use crate::{BodyError, IntentBody, IntentStatus, Quotation, SubmitOutcome, VenueFault};
 
 /// Venue identifier: the id an adapter registers under and every client
-/// call routes to. Opaque beyond equality, and never empty or
-/// whitespace-padded: every constructor validates, at const evaluation for
-/// [`VenueId::from_static`].
+/// call routes to. Opaque beyond equality, and validated by every
+/// constructor.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct VenueId(Cow<'static, str>);
 
@@ -34,18 +33,12 @@ impl VenueId {
     ///
     /// # Panics
     ///
-    /// On an empty or whitespace-padded id. The panic lands at const
-    /// evaluation where the call site is a const, so a bad [`Venue::ID`]
-    /// never compiles:
+    /// On an invalid id, at const evaluation when the call site is const:
     ///
     /// ```compile_fail
     /// use videre_sdk::VenueId;
     /// const ID: VenueId = VenueId::from_static(" demo");
     /// ```
-    ///
-    /// Elsewhere it lands at the call. Use [`VenueId::new`] for a static
-    /// id that is not known good; it takes the same input without
-    /// allocating and reports the failure.
     #[must_use]
     pub const fn from_static(id: &'static str) -> Self {
         assert!(
@@ -55,10 +48,8 @@ impl VenueId {
         Self(Cow::Borrowed(id))
     }
 
-    /// Validating constructor: rejects empty input and surrounding
-    /// whitespace. A padded id is rejected, never trimmed: a trim would
-    /// collapse two spellings into one id. Interior whitespace stays
-    /// legal.
+    /// Validating constructor. A padded id is rejected, never trimmed,
+    /// because a trim would collapse two spellings into one id.
     pub fn new(id: impl Into<Cow<'static, str>>) -> Result<Self, InvalidVenueId> {
         let id = id.into();
         if padded(&id) {
@@ -75,15 +66,13 @@ impl VenueId {
 }
 
 /// True when `id` is empty, or opens or closes on Unicode whitespace.
-/// Const for [`VenueId::from_static`], so the boundary chars are decoded by
-/// hand: `str::chars` is not const.
+/// The boundary chars are decoded by hand because `str::chars` is not const.
 const fn padded(id: &str) -> bool {
     let bytes = id.as_bytes();
     if bytes.is_empty() {
         return true;
     }
-    // Walk back over the trailing char's continuation bytes to find where
-    // that char starts.
+    // Walk back over the trailing char's continuation bytes.
     let mut last = bytes.len() - 1;
     while bytes[last] & 0xC0 == 0x80 {
         last -= 1;
@@ -92,9 +81,7 @@ const fn padded(id: &str) -> bool {
 }
 
 /// Decode the code point that starts at `at`. The caller must give a char
-/// boundary: `str` then guarantees that every continuation byte the lead
-/// byte promises is present. A non-lead byte takes the final arm, which
-/// reports a code point no id can hold.
+/// boundary, which guarantees the continuation bytes are present.
 const fn code_point_at(bytes: &[u8], at: usize) -> u32 {
     let b0 = bytes[at] as u32;
     match b0 {
@@ -111,8 +98,8 @@ const fn code_point_at(bytes: &[u8], at: usize) -> u32 {
                 | ((bytes[at + 2] as u32 & 0x3F) << 6)
                 | (bytes[at + 3] as u32 & 0x3F)
         }
-        // Unreachable on a char boundary: no lead byte is left. Surrogate
-        // range, so `char::from_u32` refuses it and the id is not padded.
+        // Unreachable on a char boundary. A surrogate, so `char::from_u32`
+        // refuses it and the id is not padded.
         _ => 0xD800,
     }
 }
@@ -469,11 +456,8 @@ mod tests {
         assert!(VenueId::try_from("\tdemo".to_owned()).is_err());
         assert!(VenueId::new("demo\u{a0}").is_err());
         assert!(VenueId::new("\u{2028}demo".to_owned()).is_err());
-        // Interior whitespace is not surrounding: reject-not-trim keeps the
-        // spelling exact and never rewrites it.
         assert!(VenueId::new("demo venue").is_ok());
-        // The rejection carries the untrimmed spelling back, so an operator
-        // sees the padding that failed.
+        // The error carries the untrimmed spelling back.
         let err = VenueId::new(" demo ".to_owned()).expect_err("padded");
         assert!(err.to_string().contains("\" demo \""), "{err}");
     }
@@ -496,15 +480,14 @@ mod tests {
 
     #[test]
     fn padded_walks_every_utf8_width_at_both_ends() {
-        // Whitespace at each width it can encode to: U+0020 (1), U+00A0
-        // (2), U+2028 and U+3000 (3). Unicode gives no 4-byte whitespace.
+        // Whitespace at each width it encodes to. Unicode has no 4-byte
+        // whitespace.
         for ws in ["\u{20}", "\u{a0}", "\u{2028}", "\u{3000}"] {
             assert!(padded(&format!("{ws}demo")), "{ws:?} leads");
             assert!(padded(&format!("demo{ws}")), "{ws:?} trails");
             assert!(padded(ws), "{ws:?} alone");
         }
-        // Non-whitespace at every width, including 4: U+0041 (1), U+00C0
-        // (2), U+4E00 (3), U+1F600 (4).
+        // Non-whitespace at every width, including 4 bytes.
         for ok in ["A", "\u{c0}", "\u{4e00}", "\u{1f600}"] {
             assert!(!padded(&format!("{ok}demo{ok}")), "{ok:?} wraps");
             // A lone multi-byte char: the backward walk lands on index 0.

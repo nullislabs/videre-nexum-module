@@ -26,10 +26,9 @@ use crate::bindings::{
     IntentHeader, IntentStatus, Quotation, RateLimit, SubmitOutcome, VenueError,
 };
 
-/// Venue identifier an adapter registers under. Opaque beyond equality,
-/// never empty or whitespace-padded: the field is private and
-/// [`VenueId::new`] is the only constructor, so every id in the process is
-/// validated.
+/// Venue identifier an adapter registers under. Opaque beyond equality.
+/// The field is private and [`VenueId::new`] is the only constructor, so
+/// every id in the process is validated.
 /// `Ord` is derived so the registry can key a `BTreeMap` on it.
 #[derive(
     Clone,
@@ -51,10 +50,7 @@ pub struct VenueId(#[as_ref(str)] String);
 pub struct InvalidVenueId(String);
 
 impl VenueId {
-    /// Validating constructor: rejects empty input and surrounding
-    /// whitespace. A padded id is rejected, never trimmed: a trim would
-    /// collapse two spellings into one id. Interior whitespace stays
-    /// legal.
+    /// Validating constructor. A padded id is rejected, never trimmed.
     pub fn new(id: impl Into<String>) -> Result<Self, InvalidVenueId> {
         let id = id.into();
         if id.is_empty() || id.trim().len() != id.len() {
@@ -1196,8 +1192,6 @@ mod tests {
         assert!(VenueId::new("cow\n").is_err());
         assert!(VenueId::new("\tcow").is_err());
         assert!(VenueId::new("cow\u{a0}").is_err());
-        // Interior whitespace is not surrounding: reject-not-trim keeps the
-        // spelling exact and never rewrites it.
         assert!(VenueId::new("cow venue").is_ok());
     }
 
