@@ -1,24 +1,13 @@
 # Pinned videre WIT surface - 0.1.0 (frozen fold target)
 
-> Provenance: this is a historical document, recovered after the repo carve dropped the `docs/` tree.
-> The source is the pre-carve monorepo, nullislabs/shepherd commit `9e5e36c`, path `videre-wit-pinned-0.1.0.md` under its design tree.
-> The port applies house-lint normalization only (ASCII in place of the em-dash in the title); the content is otherwise unchanged.
-> Bare issue and PR numbers refer to the pre-carve nullislabs/shepherd tracker, not to this repository's tracker.
-> The live `wit/` tree in this repository is authoritative for the current surface.
-> It has grown additively since this pin: `venue-error` now also carries `invalid-receipt` and `receipt-mismatch`, and `client` now also carries `observe`.
+> Historical document from the pre-carve monorepo, nullislabs/shepherd commit `9e5e36c`, path `videre-wit-pinned-0.1.0.md`; the port applies ASCII normalization of the title only, and its issue and PR numbers are pre-carve.
 >
-> Retired claims, kept here as history and corrected once:
-> §3 presents the `adapter` face as the export of one venue, and §5 equates that face with the `venue-adapter` guest component world.
-> The `adapter` interface still exists in `wit/videre-venue/venue.wit`, but the host now runs a venue in process.
-> A venue is a native Rust adapter that implements `VenueInvoker` from `videre-host`, and the composition root registers it with `VenueRegistry::register`.
-> The `venue-adapter` world therefore serves only an out-of-process adapter component.
-> §4 ends by putting an `intent-status-update` record in the host `types.wit`.
-> That record left `nexum:host` entirely; the package now carries a generic `extension-trigger` and a `trigger` variant, and neither names an intent.
-> The update rides that generic extension trigger as an opaque payload, under the `intent-status` extension kind.
-> The `videre-status-body` crate owns both halves: an envelope tag over `{venue, receipt, status}`, and the status body itself.
-> There are two independent version tags now, not one.
-> The §4 body layout is still accurate: the tag leads, then the status, then the optional proof and reason.
-> §5 maps `AdapterActor` to `VenueActor`; no `VenueActor` survives, because the host no longer supervises a venue component.
+> Retired claims, load-bearing only, not exhaustive:
+> - §3 presents the `adapter` face as the export of one venue and §5 equates it with the `venue-adapter` guest component world. The interface still exists in `wit/videre-venue/venue.wit`, but the host now runs a venue in process: a venue is a native Rust adapter that implements `VenueInvoker` from `videre-host`, registered with `VenueRegistry::register`, so the `venue-adapter` world serves only an out-of-process adapter component.
+> - §4 ends by putting an `intent-status-update` record in the host `types.wit`. That record left `nexum:host` entirely: the package now carries a generic `extension-trigger` and a `trigger` variant that name no intent, and the update rides that generic trigger as an opaque payload under the `intent-status` extension kind.
+> - `videre-status-body` owns both halves, an envelope tag over `{venue, receipt, status}` and the status body itself, so there are two independent version tags now, not one. The §4 body layout is still accurate: the tag leads, then the status, then the optional proof and reason.
+> - §5 maps `AdapterActor` to `VenueActor`; no `VenueActor` survives, because the host no longer supervises a venue component.
+> - The live `wit/` tree is authoritative and has grown additively since this pin: `venue-error` also carries `invalid-receipt` and `receipt-mismatch`, and `client` also carries `observe`.
 
 The byte-exact target the M1 contract fold (#366) rewrites to, and the oracle
 checks against. Supersedes `videre-split-plan.md` §7.4 where they differ.

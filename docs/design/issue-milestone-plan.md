@@ -1,16 +1,10 @@
 # Videre three-layer split: issue and milestone plan (v3)
 
-> Provenance: this is a historical document, recovered after the repo carve dropped the `docs/` tree.
-> The source is the pre-carve monorepo, nullislabs/shepherd commit `fb02235`, path `issue-milestone-plan.md` under its design tree.
-> The port applies carve-era path fixups only; the content is otherwise unchanged.
-> Bare issue, milestone, and epic numbers refer to the pre-carve nullislabs/shepherd tracker, not to this repository's tracker.
-> The plan has since been applied and superseded by the live trackers of the three carved repos.
+> Historical document from the pre-carve monorepo, nullislabs/shepherd commit `fb02235`, path `issue-milestone-plan.md`; the port applies path fixups only, and its issue, milestone, and epic numbers are all pre-carve.
 >
-> Retired claims, kept here as history and corrected once:
-> The M2 and M4 charters make a venue a supervised guest component and name an adapter cdylib.
-> A venue is now a native Rust adapter that implements `VenueInvoker` from `videre-host`, and the composition root registers it with `VenueRegistry::register`.
-> The runtime deleted the extension-installed component path, so an extension can no longer install or supervise a guest.
-> Read this document for the milestone shape and the execution order, not for the adapter model.
+> Retired claims, load-bearing only, not exhaustive:
+> - The M2 and M4 charters make a venue a supervised guest component and name an adapter cdylib. A venue is now a native Rust adapter that implements `VenueInvoker` from `videre-host`, the composition root registers it with `VenueRegistry::register`, and the runtime deleted the extension-installed component path.
+> - The plan has been applied and superseded by the live trackers of the three carved repos.
 
 Reorganisation plan for `nullislabs/shepherd`, generated against the develop tracker state (61 open issues). This document is DATA and PLANNING only: nothing here has been created, closed, edited, or re-milestoned on GitHub. The machine-readable source of truth is `issue-milestone-plan.json`, which stays in the pre-carve shepherd tree at commit `fb02235`; the architecture rationale lives in `venue-platform-architecture.md` in that tree (commit `9fca43c`) and in `docs/design/videre-split-plan.md`.
 

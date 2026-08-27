@@ -1,34 +1,16 @@
 # The videre split - next-push execution plan
 
-> Provenance: this is a historical document, recovered after the repo carve dropped the `docs/` tree.
-> The source is the pre-carve monorepo, nullislabs/shepherd commit `9e5e36c`, path `videre-split-plan.md` under its design tree.
-> The port applies carve-era path fixups and house-lint normalization (ASCII in place of em-dashes and box-drawing characters); the content is otherwise unchanged.
-> Bare issue, PR, and ADR numbers refer to the pre-carve nullislabs/shepherd tracker, not to this repository's tracker.
-> In-tree file paths and line numbers refer to the pre-carve monorepo tree at the stated baselines, not to this repository.
-> The split this plan sequences has since executed: this repository is the carved videre layer.
+> Historical document from the pre-carve monorepo, nullislabs/shepherd commit `9e5e36c`, path `videre-split-plan.md`; the port applies path fixups and ASCII normalization only, and its issue, PR, ADR, path, and line references are all pre-carve.
 >
-> Retired claims, kept here as history and corrected once:
-> This plan makes a venue a guest wasm component of kind `venue-adapter` that the host installs and supervises (§2.3, §2.5, §3.4, §4.1, §7.1, §7.2, §8).
-> A venue is now a native Rust adapter that implements `VenueInvoker` from `videre-host`, and the composition root registers it with `VenueRegistry::register`.
-> The runtime deleted the extension-installed component path, so an extension can no longer install or supervise a guest.
-> A keeper stays a guest wasm component, and it still reaches a venue through `videre:venue/client`.
-> The whole §7.2 seam sketch is retired, not only its provider half.
-> `ProviderKind`, `HostService`, `Extension::service`, `Extension::provider`, and the `HostState.services` typed map of §8 S1.1 have no live counterpart.
-> `HostState` carries no service map at all, so `videre-host` reaches its registry through a process-wide slot.
-> The live `Extension` trait is `namespace`, `capabilities`, `link`, `manifest_sections`, `admit_worker`, `emits_trigger_kinds`, and `open_sources`.
-> The install predicate of §2.2 and §3.3 is retired with it.
-> Its live equivalent is `Extension::admit_worker`, and it works the other way round: it is a keeper-side check that reads the keeper's `[venue] body_version` and admits the keeper only when every already-registered venue decodes that version.
-> It is not an adapter install gate, because the host no longer installs an adapter.
-> §2.1 and §2.4 name the layer-3 repo `CoW-on-videre`; the carve named it `shepherd`.
-> `videre:intent` landed as `videre:types` plus `videre:venue`, which §8 P0.2 already anticipates; read every `videre:intent` and `videre:adapter` mention that way.
-> The live wiring call is `builder.with_extensions([Arc::new(videre_host::platform())])`, not the `with_extension` of §7.2.
->
-> Renames to read through, wherever the body uses the old name:
-> the `event-module` world is `trigger-module`, and an event subscription is a `[[trigger]]` row keyed by `on`.
-> `module.toml` is `component.toml`, and its `capabilities = [...]` is `[dependencies]`.
-> `nexum:host` kept only `chain`, `local-store`, and `logging`; the `messaging`, `identity`, and `remote-store` interfaces this plan names are deleted.
->
-> Read `AGENTS.md` for the live seam.
+> Retired claims, load-bearing only, not exhaustive:
+> - §2.3, §2.5, §3.4, §4.1, §7.1, §7.2 and §8 make a venue a guest wasm component of kind `venue-adapter` that the host installs and supervises. A venue is now a native Rust adapter that implements `VenueInvoker` from `videre-host`, the composition root registers it with `VenueRegistry::register`, and the runtime deleted the extension-installed component path. A keeper stays a guest wasm component, and it still reaches a venue through `videre:venue/client`.
+> - §7.2 and §8 S1.1 propose `ProviderKind`, `HostService`, `Extension::service`, `Extension::provider` and a `HostState.services` typed map. None exist; the live `Extension` is `namespace`, `capabilities`, `link`, `manifest_sections`, `admit_worker`, `emits_trigger_kinds`, `open_sources`, and `videre-host` reaches its registry through a process-wide slot because `HostState` carries no service map.
+> - The install predicate of §2.2 and §3.3 is retired. Its live equivalent `Extension::admit_worker` runs the other way round: it reads the keeper's `[venue] body_version` and admits the keeper only when every registered venue decodes that version.
+> - §7.2 wires with `with_extension`; the live call is `builder.with_extensions([Arc::new(videre_host::platform())])`.
+> - §2.1 and §2.4 name the layer-3 repo `CoW-on-videre`; the carve named it `shepherd`.
+> - `videre:intent` landed as `videre:types` plus `videre:venue`, as §8 P0.2 anticipates; read every `videre:intent` and `videre:adapter` mention that way.
+> - Renames in the body: the `event-module` world is `trigger-module` and an event subscription is a `[[trigger]]` row keyed by `on`; `module.toml` is `component.toml` and its `capabilities = [...]` is `[dependencies]`; `nexum:host` kept only `chain`, `local-store` and `logging`, so the `messaging`, `identity` and `remote-store` interfaces are deleted.
+> - The split has executed: this repository is the carved videre layer.
 
 **Splitting `nullislabs/shepherd` (`dev/m1` @ `ddfb2b9`, design-doc baseline `aed942c`) into three repos: `nexum-runtime` ← `videre` ← `CoW-on-videre`.**
 
