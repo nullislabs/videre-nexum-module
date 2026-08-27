@@ -7,8 +7,8 @@
 //! - [`HeaderGoldens`]: published bodies paired with the header a
 //!   conforming `derive-header` projects, in the [`GoldenHeader`] mirror
 //!   types.
-//! - [`MockTransport`]: the chain, messaging, and outbound-HTTP
-//!   transports as programmable in-memory mocks behind the SDK seams.
+//! - [`MockTransport`]: the chain and outbound-HTTP transports as
+//!   programmable in-memory mocks behind the SDK seams.
 //!
 //! ```rust
 //! use videre_test::reference::{
@@ -41,7 +41,4 @@ pub use header::{
 };
 pub use reconcile::ReconcileFixture;
 pub use report::{ConformanceReport, Violation};
-pub use transport::{
-    ChainCall, Message, MessagingHost, MockChain, MockFetch, MockMessaging, MockTransport,
-    PublishRecord, RecordedRequest,
-};
+pub use transport::{ChainCall, MockChain, MockFetch, MockTransport, RecordedRequest};

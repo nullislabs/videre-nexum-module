@@ -1,0 +1,23 @@
+[package]
+name = "echo-venue"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Reference native venue adapter: accepts any body, echoes it back as the receipt, and settles instantly. The worked target of the videre-test conformance kit."
+
+[lints]
+workspace = true
+
+[dependencies]
+# The venue seam. `VenueInvoker` and the shared bindings types both come
+# from the host crate now that a venue is a native Rust adapter.
+videre-host = { path = "../videre-host" }
+futures.workspace = true
+
+[dev-dependencies]
+# The conformance kit: holds this adapter's header derivation to the kit's
+# golden mirror types, so echo-venue is both the tutorial artefact and the
+# kit's worked test target.
+videre-test = { path = "../videre-test" }
+tokio.workspace = true

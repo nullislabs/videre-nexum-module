@@ -3,15 +3,14 @@
 //! set it decodes, and a keeper boots only when every installed adapter
 //! decodes its version.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{anyhow, bail};
-use nexum_runtime::host::extension::ProviderManifest;
+use anyhow::anyhow;
 use nexum_runtime::manifest::ExtensionSections;
 use serde::Deserialize;
 use tracing::error;
 
-use crate::registry::VenueAdapterKind;
+use crate::registry::VenueId;
 
 /// The manifest section the videre platform claims.
 pub(crate) const SECTION: &str = "venue";
@@ -26,13 +25,6 @@ struct KeeperSection {
     body_version: u32,
 }
 
-/// Adapter-side `[venue]`: the body-schema versions it decodes.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AdapterSection {
-    body_versions: BTreeSet<u32>,
-}
-
 /// Parse one `[venue]` value as `S`, tagging failures with the owner.
 fn parse<S: for<'de> Deserialize<'de>>(owner: &str, value: &toml::Value) -> anyhow::Result<S> {
     value
@@ -41,88 +33,38 @@ fn parse<S: for<'de> Deserialize<'de>>(owner: &str, value: &toml::Value) -> anyh
         .map_err(|e| anyhow!("{owner} [venue]: {e}"))
 }
 
-/// Admit one provider: a present `[venue]` section must be the adapter
-/// shape with a non-empty version set. An absent section is admitted
-/// (opt-out).
-pub(crate) fn admit_provider(provider: &str, sections: &ExtensionSections) -> anyhow::Result<()> {
-    let Some(value) = sections.get(SECTION) else {
-        return Ok(());
-    };
-    let section: AdapterSection = parse(provider, value)?;
-    if section.body_versions.is_empty() {
-        bail!("{provider} [venue]: body_versions must not be empty");
-    }
-    Ok(())
-}
-
-/// An adapter's declared decode set: its `[venue] body_versions`, empty
-/// when the section is absent.
-pub(crate) fn declared_versions(
-    provider: &str,
-    sections: &ExtensionSections,
-) -> anyhow::Result<BTreeSet<u32>> {
-    let Some(value) = sections.get(SECTION) else {
-        return Ok(BTreeSet::new());
-    };
-    let section: AdapterSection = parse(provider, value)?;
-    Ok(section.body_versions)
-}
-
-/// Assert an adapter's `body-versions()` export equals its manifest claim,
-/// refusing the install on divergence.
-pub(crate) fn verify_exported_versions(
-    provider: &str,
-    declared: &BTreeSet<u32>,
-    exported: Vec<u32>,
-) -> anyhow::Result<()> {
-    let exported: BTreeSet<u32> = exported.into_iter().collect();
-    if exported != *declared {
-        bail!(
-            "{provider} exports body versions {exported:?}; the manifest [venue] \
-             body_versions declares {declared:?}"
-        );
-    }
-    Ok(())
-}
-
 /// Membership predicate: a worker declaring `[venue] body_version` is
-/// admitted only when every installed adapter's `body_versions` contains
-/// it, so one non-decoding adapter refuses the keeper. An absent section is
+/// admitted only when every registered venue's `body_versions` contains
+/// it, so one non-decoding venue refuses the keeper. An absent section is
 /// admitted (opt-out).
 pub(crate) fn admit_worker(
     worker: &str,
     sections: &ExtensionSections,
-    providers: &[ProviderManifest],
+    registered: &BTreeMap<VenueId, BTreeSet<u32>>,
 ) -> anyhow::Result<()> {
     let Some(value) = sections.get(SECTION) else {
         return Ok(());
     };
     let KeeperSection { body_version } = parse(worker, value)?;
-    let adapters: Vec<&ProviderManifest> = providers
+    // A venue registering an empty set has opted out of the handshake; it
+    // neither satisfies nor refuses a keeper.
+    let declaring: Vec<(&VenueId, &BTreeSet<u32>)> = registered
         .iter()
-        .filter(|p| p.kind == VenueAdapterKind::KIND)
+        .filter(|(_, versions)| !versions.is_empty())
         .collect();
-    if adapters.is_empty() {
+    if declaring.is_empty() {
         return Err(refuse(
             worker,
             body_version,
-            "no venue adapter declares [venue] body_versions",
+            "no registered venue declares [venue] body_versions",
         ));
     }
-    for provider in adapters {
-        let Some(value) = provider.sections.get(SECTION) else {
+    for (venue, versions) in declaring {
+        if !versions.contains(&body_version) {
             return Err(refuse(
                 worker,
                 body_version,
-                &format!("{} declares no [venue] body_versions", provider.name),
-            ));
-        };
-        let section: AdapterSection = parse(&provider.name, value)?;
-        if !section.body_versions.contains(&body_version) {
-            return Err(refuse(
-                worker,
-                body_version,
-                &format!("{} decodes {:?}", provider.name, section.body_versions),
+                &format!("{venue} decodes {versions:?}"),
             ));
         }
     }
@@ -149,134 +91,100 @@ mod tests {
         table.into_iter().collect()
     }
 
-    fn adapter(name: &str, toml: &str) -> ProviderManifest {
-        ProviderManifest {
-            name: name.to_owned(),
-            kind: VenueAdapterKind::KIND,
-            sections: sections(toml),
-        }
+    /// The registered-venue table the predicate reads, from `(id, versions)`
+    /// pairs.
+    fn registered(
+        venues: impl IntoIterator<Item = (&'static str, &'static [u32])>,
+    ) -> BTreeMap<VenueId, BTreeSet<u32>> {
+        venues
+            .into_iter()
+            .map(|(id, versions)| {
+                (
+                    VenueId::new(id).expect("valid venue id"),
+                    versions.iter().copied().collect(),
+                )
+            })
+            .collect()
     }
 
-    /// A keeper whose version every installed adapter decodes is admitted.
+    /// A keeper whose version every registered venue decodes is admitted.
     #[test]
     fn matching_pair_is_admitted() {
         let keeper = sections("[venue]\nbody_version = 2");
-        let adapters = [
-            adapter("cow", "[venue]\nbody_versions = [1, 2]"),
-            adapter("uni", "[venue]\nbody_versions = [2, 3]"),
-        ];
-        admit_worker("keeper", &keeper, &adapters).expect("admitted");
+        let venues = registered([("cow", &[1, 2][..]), ("uni", &[2, 3][..])]);
+        admit_worker("keeper", &keeper, &venues).expect("admitted");
     }
 
-    /// A keeper whose version no adapter decodes is refused, and the
-    /// refusal names the version and the declared set.
+    /// A keeper whose version no venue decodes is refused, and the refusal
+    /// names the version and the declared set.
     #[test]
     fn mismatched_pair_is_refused() {
         let keeper = sections("[venue]\nbody_version = 2");
-        let adapters = [adapter("cow", "[venue]\nbody_versions = [1]")];
-        let err = admit_worker("keeper", &keeper, &adapters).expect_err("refused");
+        let venues = registered([("cow", &[1][..])]);
+        let err = admit_worker("keeper", &keeper, &venues).expect_err("refused");
         let msg = err.to_string();
         assert!(msg.contains("body version 2"), "{msg}");
         assert!(msg.contains("cow decodes {1}"), "{msg}");
     }
 
-    /// One non-decoding adapter refuses the keeper even when another decodes
+    /// One non-decoding venue refuses the keeper even when another decodes
     /// its version.
     #[test]
-    fn one_non_decoding_adapter_refuses_the_keeper() {
+    fn one_non_decoding_venue_refuses_the_keeper() {
         let keeper = sections("[venue]\nbody_version = 2");
-        let adapters = [
-            adapter("cow", "[venue]\nbody_versions = [1, 2]"),
-            adapter("uni", "[venue]\nbody_versions = [1]"),
-        ];
-        let err = admit_worker("keeper", &keeper, &adapters).expect_err("refused");
+        let venues = registered([("cow", &[1, 2][..]), ("uni", &[1][..])]);
+        let err = admit_worker("keeper", &keeper, &venues).expect_err("refused");
         let msg = err.to_string();
         assert!(msg.contains("body version 2"), "{msg}");
         assert!(msg.contains("uni decodes {1}"), "{msg}");
     }
 
-    /// A declaring keeper with no installed venue adapter is refused.
+    /// A declaring keeper with no registered venue at all is refused.
     #[test]
-    fn undeclared_adapters_refuse_a_declaring_keeper() {
+    fn no_registered_venue_refuses_a_declaring_keeper() {
         let keeper = sections("[venue]\nbody_version = 1");
-        let err = admit_worker("keeper", &keeper, &[]).expect_err("refused");
-        assert!(err.to_string().contains("no venue adapter declares"));
+        let err = admit_worker("keeper", &keeper, &BTreeMap::new()).expect_err("refused");
+        assert!(
+            err.to_string().contains("no registered venue declares"),
+            "{err}",
+        );
     }
 
-    /// An installed adapter without a `[venue]` section refuses a
-    /// declaring keeper: its decode set is undeclared, not universal.
+    /// A venue registering an empty set has opted out: it cannot satisfy a
+    /// declaring keeper on its own.
     #[test]
-    fn a_section_less_adapter_refuses_a_declaring_keeper() {
+    fn an_opted_out_venue_never_satisfies_a_declaring_keeper() {
         let keeper = sections("[venue]\nbody_version = 1");
-        let adapters = [adapter("cow", "")];
-        let err = admit_worker("keeper", &keeper, &adapters).expect_err("refused");
-        assert!(err.to_string().contains("cow declares no [venue]"));
+        let venues = registered([("cow", &[][..])]);
+        let err = admit_worker("keeper", &keeper, &venues).expect_err("refused");
+        assert!(
+            err.to_string().contains("no registered venue declares"),
+            "{err}",
+        );
     }
 
-    /// A provider of another kind never satisfies the membership check.
+    /// An opted-out venue also refuses nothing: a declaring sibling alone
+    /// decides the keeper.
     #[test]
-    fn other_provider_kinds_are_ignored() {
-        let keeper = sections("[venue]\nbody_version = 1");
-        let mut other = adapter("oracle", "[venue]\nbody_versions = [1]");
-        other.kind = "price-oracle";
-        admit_worker("keeper", &keeper, &[other]).expect_err("refused");
+    fn an_opted_out_venue_never_refuses_a_keeper() {
+        let keeper = sections("[venue]\nbody_version = 2");
+        let venues = registered([("cow", &[][..]), ("uni", &[2][..])]);
+        admit_worker("keeper", &keeper, &venues).expect("the declaring venue decides");
     }
 
-    /// Workers and providers without a `[venue]` section are admitted.
+    /// A worker without a `[venue]` section is admitted.
     #[test]
     fn undeclared_sections_are_admitted() {
-        admit_worker("keeper", &ExtensionSections::new(), &[]).expect("worker admitted");
-        admit_provider("venue", &ExtensionSections::new()).expect("provider admitted");
+        admit_worker("keeper", &ExtensionSections::new(), &BTreeMap::new())
+            .expect("worker admitted");
     }
 
-    /// The wrong-side spelling fails loudly on both faces.
+    /// The venue-side spelling on the keeper face fails loudly.
     #[test]
     fn wrong_side_spelling_is_refused() {
         let keeper = sections("[venue]\nbody_versions = [1]");
-        admit_worker("keeper", &keeper, &[]).expect_err("keeper with the adapter key");
-
-        let venue = sections("[venue]\nbody_version = 1");
-        admit_provider("venue", &venue).expect_err("adapter with the keeper key");
-    }
-
-    /// An adapter declaring an empty decode set is refused at install.
-    #[test]
-    fn empty_adapter_set_is_refused() {
-        let venue = sections("[venue]\nbody_versions = []");
-        let err = admit_provider("venue", &venue).expect_err("refused");
-        assert!(err.to_string().contains("must not be empty"));
-    }
-
-    /// A well-formed adapter declaration is admitted.
-    #[test]
-    fn adapter_declaration_is_admitted() {
-        let venue = sections("[venue]\nbody_versions = [1, 2]");
-        admit_provider("venue", &venue).expect("admitted");
-    }
-
-    /// The exported set must equal the manifest claim exactly; either
-    /// direction of drift refuses the install.
-    #[test]
-    fn exported_versions_must_equal_the_manifest_claim() {
-        let declared = declared_versions("venue", &sections("[venue]\nbody_versions = [1, 2]"))
-            .expect("declared");
-        verify_exported_versions("venue", &declared, vec![2, 1]).expect("equal sets");
-
-        let err = verify_exported_versions("venue", &declared, vec![1]).expect_err("narrower");
-        assert!(
-            err.to_string().contains("exports body versions {1}"),
-            "{err}"
-        );
-        verify_exported_versions("venue", &declared, vec![1, 2, 3]).expect_err("wider");
-    }
-
-    /// A section-less adapter must export an empty set: an undeclared
-    /// manifest with a declaring export is drift, not a default.
-    #[test]
-    fn a_section_less_adapter_must_export_no_versions() {
-        let declared = declared_versions("venue", &ExtensionSections::new()).expect("declared");
-        assert!(declared.is_empty());
-        verify_exported_versions("venue", &declared, Vec::new()).expect("both undeclared");
-        verify_exported_versions("venue", &declared, vec![1]).expect_err("export-only drift");
+        let err = admit_worker("keeper", &keeper, &BTreeMap::new())
+            .expect_err("keeper with the venue key");
+        assert!(err.to_string().contains("keeper [venue]"), "{err}");
     }
 }

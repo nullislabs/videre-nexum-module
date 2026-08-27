@@ -7,8 +7,8 @@ repository.workspace = true
 description = "Conformance kit for venue adapters: file-published borsh codec round-trip vectors, header-derivation golden fixtures, and an in-memory MockTransport for adapter unit tests."
 
 [lib]
-# Plain library, host-only - adapter crates list this under
-# [dev-dependencies] so it never ships in the wasm bundle.
+# Plain library: a venue crate lists it under [dev-dependencies], so the
+# kit stays out of the venue's own dependency graph.
 
 [lints]
 workspace = true
@@ -23,14 +23,14 @@ hex.workspace = true
 # `MockFetch` speaks the standard `http` request/response types the
 # SDK's `Fetch` seam is expressed in.
 http.workspace = true
-# Transport seam vocabulary: `ChainHost`, `Fault`, and the `Fetch` seam
-# the mocks implement.
-nexum-sdk = { git = "https://github.com/nullislabs/nexum-runtime", rev = "d78a368aa0544dd8cf1100ce657df0eada781f1a" }
+# Transport seam vocabulary: the `ChainHost` and `Fetch` seams the mocks
+# implement.
+nexum-sdk = { git = "https://github.com/nullislabs/nexum-runtime", rev = "fd16db7709f01bf06116d98053a894de4b1f4adf" }
 # `MockChain` is composed rather than reimplemented: one chain mock
 # serves both personas.
-nexum-sdk-test = { git = "https://github.com/nullislabs/nexum-runtime", rev = "d78a368aa0544dd8cf1100ce657df0eada781f1a" }
-# The contract under test: `IntentBody`, `BodyError`, the intent
-# header types, and the `MessagingHost` seam.
+nexum-sdk-test = { git = "https://github.com/nullislabs/nexum-runtime", rev = "fd16db7709f01bf06116d98053a894de4b1f4adf" }
+# The contract under test: `IntentBody`, `BodyError`, and the intent
+# header types.
 videre-sdk = { path = "../videre-sdk" }
 serde = { workspace = true }
 serde_json.workspace = true

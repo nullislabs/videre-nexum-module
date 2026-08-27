@@ -1,27 +1,23 @@
-//! In-memory mocks for the three transports a venue adapter is granted:
-//! chain RPC, messaging, and outbound HTTP.
+//! In-memory mocks for the two transports a venue adapter is granted:
+//! chain RPC and outbound HTTP.
 //!
 //! [`MockTransport`] composes them behind the SDK seams ([`ChainHost`],
-//! [`MessagingHost`], [`Fetch`]). [`MockMessaging::scope_topics`] plays
-//! the `messaging_topics` grant and [`MockFetch::scope_hosts`] the
-//! `[capabilities.http].allow` list; both refuse off-grant calls as a
-//! typed `denied`, as the host would.
+//! [`Fetch`]). [`MockFetch::scope_hosts`] plays the manifest grant
+//! `[dependencies] http = { hosts = [...] }`: an off-grant request fails
+//! as a typed `denied`, as the host would refuse it.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use nexum_sdk::host::{ChainError, ChainHost, Fault};
+use nexum_sdk::host::{ChainError, ChainHost};
 use nexum_sdk::http::{Fetch, FetchError, FetchOptions};
-pub use nexum_sdk_test::{ChainCall, MockChain, MockMessaging, PublishRecord};
-pub use videre_sdk::transport::{Message, MessagingHost};
+pub use nexum_sdk_test::{ChainCall, MockChain};
 
 /// Composed in-memory transport; each field is the per-seam mock.
 #[derive(Default)]
 pub struct MockTransport {
     /// `nexum:host/chain` mock.
     pub chain: MockChain,
-    /// `nexum:host/messaging` mock.
-    pub messaging: MockMessaging,
     /// Outbound wasi:http mock.
     pub http: MockFetch,
 }
@@ -36,23 +32,6 @@ impl MockTransport {
 impl ChainHost for MockTransport {
     fn request(&self, chain_id: u64, method: &str, params: &str) -> Result<String, ChainError> {
         self.chain.request(chain_id, method, params)
-    }
-}
-
-impl MessagingHost for MockTransport {
-    fn publish(&self, content_topic: &str, payload: &[u8]) -> Result<(), Fault> {
-        self.messaging.publish(content_topic, payload)
-    }
-
-    fn query(
-        &self,
-        content_topic: &str,
-        start_time: Option<u64>,
-        end_time: Option<u64>,
-        limit: Option<u32>,
-    ) -> Result<Vec<Message>, Fault> {
-        self.messaging
-            .query(content_topic, start_time, end_time, limit)
     }
 }
 
@@ -87,7 +66,7 @@ struct StoredResponse {
 }
 
 /// In-memory [`Fetch`] over a `(method, uri)` response map; records every
-/// request. An optional host scope plays the `[capabilities.http].allow`
+/// request. An optional host scope plays the manifest's `http` dependency
 /// grant ([`scope_hosts`](Self::scope_hosts)).
 #[derive(Default)]
 pub struct MockFetch {
@@ -97,10 +76,10 @@ pub struct MockFetch {
 }
 
 impl MockFetch {
-    /// Confine the mock to `hosts`, mirroring the `[capabilities.http].allow`
-    /// grant: case-insensitive, an entry is an exact hostname or `*.suffix`
-    /// wildcard, off-grant fails [`FetchError::Denied`]. An empty grant
-    /// denies every host.
+    /// Confine the mock to `hosts`, mirroring the manifest grant
+    /// `[dependencies] http = { hosts = [...] }`: case-insensitive, an
+    /// entry is an exact hostname or `*.suffix` wildcard, off-grant fails
+    /// [`FetchError::Denied`]. An empty grant denies every host.
     pub fn scope_hosts(&self, hosts: impl IntoIterator<Item = impl Into<String>>) {
         *self.scope.borrow_mut() = Some(hosts.into_iter().map(Into::into).collect());
     }
@@ -306,7 +285,6 @@ mod tests {
         transport
             .chain
             .respond_to("eth_blockNumber", "[]", Ok("\"0x1\"".to_owned()));
-        transport.messaging.seed_payload("/t", b"m".to_vec(), 1);
         transport
             .http
             .respond_to(http::Method::GET, "https://venue.example/", 204, Vec::new());
@@ -318,10 +296,6 @@ mod tests {
             "\"0x1\""
         );
 
-        let messaging: &dyn MessagingHost = &transport;
-        messaging.publish("/t", b"out").unwrap();
-        assert_eq!(messaging.query("/t", None, None, None).unwrap().len(), 1);
-
         let request = http::Request::builder()
             .uri("https://venue.example/")
             .body(Vec::new())
@@ -330,7 +304,6 @@ mod tests {
         assert_eq!(response.status(), http::StatusCode::NO_CONTENT);
 
         assert_eq!(transport.chain.call_count(), 1);
-        assert_eq!(transport.messaging.publish_count(), 1);
         assert_eq!(transport.http.request_count(), 1);
     }
 }

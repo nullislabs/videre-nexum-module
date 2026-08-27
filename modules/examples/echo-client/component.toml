@@ -1,0 +1,35 @@
+# echo-client component manifest - the raw-import half of the echo pair.
+# It submits through videre:venue/client and observes intent-status, so it
+# declares the `client` dependency alongside `logging`; the per-component
+# world the macro derives imports exactly videre:venue/client and
+# nexum:host/logging.
+
+[component]
+name = "echo-client"
+version = "0.1.0"
+
+[dependencies]
+# `client` grants the videre:venue/client import; `logging` the log sink.
+client = {}
+logging = {}
+
+# Submit on every chain-1 block.
+[[trigger]]
+on = "block"
+chain_id = 1
+
+# Observe the status transitions the registry polls from the echo-venue
+# adapter. `intent-status` is videre's own trigger kind, so boot validates
+# it against the wired extensions.
+[[trigger]]
+on = "intent-status"
+venue = "echo-venue"
+
+[config]
+name = "echo-client"
+
+# The one body-schema version this keeper encodes; install refuses the
+# keeper unless every installed adapter's [venue] body_versions
+# contains it.
+[venue]
+body_version = 1

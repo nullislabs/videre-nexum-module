@@ -4,14 +4,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "The videre venue platform as one nexum-runtime extension: the venue-adapter provider kind, the venue registry service, the advisory egress-guard seam, and the videre:venue/client interface."
+description = "The videre venue platform as one nexum-runtime extension: the venue registry, the native-Rust venue-invoker seam, the advisory egress-guard seam, and the videre:venue/client interface."
 
 [lints]
 workspace = true
 
 [dependencies]
 # The runtime seam this crate plugs into; the only nexum crate edge.
-nexum-runtime = { git = "https://github.com/nullislabs/nexum-runtime", rev = "d78a368aa0544dd8cf1100ce657df0eada781f1a" }
+nexum-runtime = { git = "https://github.com/nullislabs/nexum-runtime", rev = "fd16db7709f01bf06116d98053a894de4b1f4adf" }
 # Encoder for the opaque status body the host event stream carries; the
 # registry lowers an adapter-reported status through it.
 videre-status-body = { path = "../videre-status-body" }
@@ -20,7 +20,6 @@ wasmtime.workspace = true
 anyhow.workspace = true
 derive_more.workspace = true
 thiserror.workspace = true
-async-trait.workspace = true
 futures.workspace = true
 serde.workspace = true
 tokio.workspace = true
@@ -39,6 +38,4 @@ test-utils = []
 # so `cargo test -p videre-host` sees `install_for_test` without every
 # invocation passing `--features test-utils`.
 videre-host = { path = ".", features = ["test-utils"] }
-nexum-runtime = { git = "https://github.com/nullislabs/nexum-runtime", rev = "d78a368aa0544dd8cf1100ce657df0eada781f1a", features = ["test-utils"] }
-nexum-tasks = { git = "https://github.com/nullislabs/nexum-runtime", rev = "d78a368aa0544dd8cf1100ce657df0eada781f1a" }
-tempfile.workspace = true
+nexum-runtime = { git = "https://github.com/nullislabs/nexum-runtime", rev = "fd16db7709f01bf06116d98053a894de4b1f4adf", features = ["test-utils"] }

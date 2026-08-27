@@ -1,8 +1,10 @@
 # Extension capability registry for this composition root: the
 # per-namespace rows the module world synthesis emits beyond the core
-# nexum:host table. Each row names the WIT import a `[capabilities]`
-# declaration turns into and the package directories its resolve path
-# needs, in dependency order.
+# nexum:host table. `nexum_world::manifest_extensions` reads this file.
+# Each table key is a name a component declares in its `[dependencies]`
+# table. Each row names the WIT import that declaration turns into, and
+# the package directories its resolve path needs, in dependency order.
+# The runtime supplies the `nexum-host` package, so do not list it here.
 
 [extensions.client]
 import = "videre:venue/client@0.1.0"

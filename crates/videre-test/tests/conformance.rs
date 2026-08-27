@@ -1,6 +1,8 @@
 //! Acceptance surface for the conformance kit: a reference adapter is held
 //! to the published vector and golden files, and a divergent one is caught.
 
+use nexum_sdk::host::ChainHost;
+use nexum_sdk::http::Fetch;
 use videre_sdk::value_flow::{Asset, AssetAmount};
 use videre_sdk::{
     AuthScheme, Config, Fault, IntentHeader, IntentStatus, Quotation, SubmitOutcome, VenueAdapter,
@@ -9,7 +11,7 @@ use videre_sdk::{
 use videre_test::reference::{
     CODEC_VECTORS_JSON, HEADER_GOLDENS_JSON, ReferenceBody, derive_reference_header,
 };
-use videre_test::{CodecVectors, HeaderGoldens, MessagingHost, MockTransport};
+use videre_test::{CodecVectors, HeaderGoldens, MockTransport};
 
 /// The reference venue implemented through the SDK trait, driven by the kit's mocks.
 struct ReferenceAdapter;
@@ -81,32 +83,56 @@ fn divergent_derivation_is_caught_by_the_published_goldens() {
 
 #[test]
 fn mock_transport_drives_seam_shaped_adapter_logic() {
-    // A slice of adapter logic written against the seams: announce a
-    // submission over messaging, confirm via the venue's HTTP API.
-    fn announce<M: MessagingHost>(messaging: &M, receipt: &[u8]) -> Result<(), VenueError> {
-        messaging
-            .publish("/reference/1/receipts/proto", receipt)
-            .map_err(VenueError::from)
+    // A slice of adapter logic written against the seams: read the head
+    // block over chain RPC, then confirm a submission through the venue's
+    // HTTP API.
+    fn head_block<C: ChainHost>(chain: &C) -> Result<String, VenueError> {
+        chain
+            .request(1, "eth_blockNumber", "[]")
+            .map_err(|err| VenueError::Unavailable(err.to_string()))
+    }
+
+    fn confirm<F: Fetch>(fetch: &F, receipt: &[u8]) -> Result<u16, VenueError> {
+        let request = http::Request::builder()
+            .method(http::Method::POST)
+            .uri("https://venue.example/api/v1/receipts")
+            .body(receipt.to_vec())
+            .expect("the confirmation request builds");
+        let response = fetch.fetch(request)?;
+        Ok(response.status().as_u16())
     }
 
     let transport = MockTransport::new();
+    transport.http.scope_hosts(["venue.example"]);
+    transport.http.respond_to(
+        http::Method::POST,
+        "https://venue.example/api/v1/receipts",
+        202,
+        Vec::new(),
+    );
     transport
-        .messaging
-        .scope_topics(["/reference/1/receipts/proto"]);
+        .chain
+        .respond_to("eth_blockNumber", "[]", Ok("\"0x1\"".to_owned()));
 
+    assert_eq!(head_block(&transport).unwrap(), "\"0x1\"");
     let SubmitOutcome::Accepted(receipt) = ReferenceAdapter::submit(vec![1, 2, 3]).unwrap() else {
         panic!("the reference venue accepts directly");
     };
-    announce(&transport, &receipt).unwrap();
-    assert_eq!(
-        transport.messaging.last_published().unwrap().payload,
-        receipt,
-    );
+    assert_eq!(confirm(&transport, &receipt).unwrap(), 202);
+    assert_eq!(transport.http.last_request().unwrap().body, receipt);
+    assert!(matches!(
+        ReferenceAdapter::status(receipt).unwrap(),
+        IntentStatus::Open,
+    ));
+    assert_eq!(transport.chain.call_count(), 1);
 
-    // An off-scope topic surfaces as the typed policy refusal.
+    // An off-grant host surfaces as the typed policy refusal.
+    let stray = http::Request::builder()
+        .uri("https://elsewhere.example/")
+        .body(Vec::new())
+        .expect("the stray request builds");
     let denied = transport
-        .messaging
-        .publish("/elsewhere", &receipt)
+        .fetch(stray)
         .map_err(VenueError::from)
         .unwrap_err();
     assert!(matches!(denied, VenueError::Denied(_)));
