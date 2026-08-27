@@ -174,14 +174,10 @@ impl<S, P: VenueTransport> Keeper<S, P> {
                 Outcome::Drop => RetryAction::Drop,
             };
             retrier.apply(commitment, action, tick)?;
-            // Bucket by the Retrier's effect, not by the action: the tick
-            // that leaves no commitment behind counts as dropped, so a
-            // `DropOnRepeat` retirement is visible under `dropped`.
+            // Bucket by the Retrier's effect, not by the action.
             let present = match commitments.get(commitment) {
                 Ok(row) => row.is_some(),
-                // Bookkeeping only: a read fault here must not discard
-                // the reconcile tally and the unsigned txs the run
-                // already holds, so fall back to the action.
+                // Bookkeeping only, so a fault must not discard the run.
                 Err(fault) => {
                     tracing::error!(%fault, "commitment read failed after a retry action");
                     !matches!(action, RetryAction::Drop)
@@ -286,9 +282,6 @@ pub struct RunReport {
     /// reconcile pass already owns this tick.
     pub retried: usize,
     /// Commitments no longer in the set after this run's retry action.
-    /// Buckets follow the [`Retrier`] effect, not the action, so the
-    /// repeat tick that retires a [`RetryAction::DropOnRepeat`]
-    /// commitment counts here.
     pub dropped: usize,
     /// Stranded reservations the reconcile pass committed this tick.
     pub reconciled_committed: usize,
@@ -655,9 +648,6 @@ mod tests {
         let venue = StubVenue::new(Ok(SubmitOutcome::Accepted(vec![1])));
         let keeper = Keeper::new(RetiringSource, &venue, "stub");
 
-        // The action is a retry, but the tick leaves no commitment behind,
-        // so the same effect check that makes a `DropOnRepeat` retirement
-        // visible under `dropped` buckets this tick there too.
         let report = run(keeper.run(&host, &TICK)).expect("keeper runs");
         assert_eq!(report.dropped, 1);
         assert_eq!(report.retried, 0);
@@ -695,8 +685,6 @@ mod tests {
         let venue = StubVenue::new(Ok(SubmitOutcome::Accepted(vec![1])));
         let keeper = Keeper::new(FaultArmingSource, &venue, "stub");
 
-        // The effect check is bookkeeping, so its fault buckets by the
-        // action instead of discarding the run.
         let report = run(keeper.run(&host, &TICK)).expect("bucketing fault must not abort the run");
         assert_eq!(report.retried, 1);
         assert_eq!(report.dropped, 0);
