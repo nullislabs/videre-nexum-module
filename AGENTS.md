@@ -49,6 +49,7 @@ just test            # cargo nextest run --workspace --all-features
 just fmt             # cargo fmt --all -- --check
 just lint            # cargo clippy --workspace --all-targets --all-features -- -D warnings
 just ci              # the full local mirror of .github/workflows/ci.yml
+just wit-sync        # check wit/deps/ against wit/deps.toml (needs wit-deps)
 ```
 
 Nextest does not run doctests, so run `cargo test --doc --workspace --all-features` after `just test`.

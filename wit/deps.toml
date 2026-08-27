@@ -1,21 +1,18 @@
 # Cross-group WIT dependencies, vendored into wit/deps/ by wit-deps.
 #
-# Sources are pinned to the owning repo's rev through the github archive
-# tarball. The nexum-host package lives at wit/nexum-host in the
-# nexum-runtime repo. The tarball unpacks under a nexum-runtime-<rev>/
-# top-level directory.
+# Each source is pinned to the owning repo's rev through the github
+# archive tarball. The digests cover the raw tarball bytes.
 #
-# NOTE: the sha256 and the sha512 below are placeholders, not real
-# digests. wit-deps is not in the dev shell and no CI job runs it, so
-# nothing verifies them. Every build reads the vendored copy under
-# wit/deps/, which is checked in. Install wit-deps, run `wit-deps
-# update`, and record the real digests when the source is next
-# refreshed.
+# A prefix that matches nothing vendors an empty tree and still exits 0,
+# so only the diff against the checked-in wit/deps/ tree catches it.
 #
-# The vendored wit/deps/nexum-host tree matches wit/nexum-host at the
-# rev above, byte for byte. Compare the two trees after you change
-# either one.
+# To re-vendor: set the new rev in the url and the prefix, record the new
+# digests, run `wit-deps update`, and commit wit/ as one change.
+#
+# GitHub does not promise stable bytes for an auto-generated archive, so
+# a digest mismatch can be its churn and not tampering.
 [nexum-host]
 url = "https://github.com/nullislabs/nexum-runtime/archive/fd16db7709f01bf06116d98053a894de4b1f4adf.tar.gz"
-sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-sha512 = "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+sha256 = "416da7e236f2e39056399524f397c80bc232606629cd744ddabc92000b17ad07"
+sha512 = "1b60be6c72473917f103d48d7267d5ec8adc2623d2383591c8652f72b70aaeefa8556068218c57adbd8b48b8eba827306fe36d395d631c98730c4a29d1a60ffb"
+prefix = "nexum-runtime-fd16db7709f01bf06116d98053a894de4b1f4adf/wit/nexum-host"
