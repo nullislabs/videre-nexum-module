@@ -179,8 +179,12 @@ fn zero_native() -> AssetAmount {
     }
 }
 
-/// Big-endian bytes with leading zeros trimmed: the minimal `uint`
-/// spelling, where an empty list is zero.
+/// Big-endian bytes with leading zeros trimmed: the canonical `uint`
+/// spelling of ADR 0001, where an empty list is zero.
+///
+/// A native venue does not link the guest SDK, so it does not reach
+/// `videre_sdk::value_flow::encode_uint`. The test below holds this local
+/// encoder to the same published vectors that the SDK codec answers to.
 fn minimal_be(value: u64) -> Vec<u8> {
     let bytes = value.to_be_bytes();
     let first = bytes.iter().position(|byte| *byte != 0);
@@ -244,7 +248,8 @@ mod conformance {
     use videre_host::bindings::IntentHeader;
     use videre_test::{
         FormatVersion, GoldenAsset, GoldenAssetAmount, GoldenAuthScheme, GoldenHeader,
-        GoldenSettlement, HeaderGolden, HeaderGoldens,
+        GoldenSettlement, HeaderGolden, HeaderGoldens, UINT_VECTORS_JSON, UintExpectation,
+        UintVectors,
     };
 
     fn zero_native() -> GoldenAssetAmount {
@@ -337,5 +342,38 @@ mod conformance {
             }],
         };
         assert!(goldens.check(derive).is_err());
+    }
+
+    #[test]
+    fn the_amount_encoder_matches_the_published_uint_vectors() {
+        // The native venue keeps its own minimal encoder, so the published
+        // vectors are what pins it to ADR 0001. Every value vector that
+        // fits a u64 must come back byte for byte.
+        let vectors = UintVectors::from_json(UINT_VECTORS_JSON).expect("the vectors parse");
+        let mut checked = 0;
+        for vector in &vectors.vectors {
+            let UintExpectation::Value(published) = &vector.expect else {
+                continue;
+            };
+            let Ok(value) = published.parse::<u64>() else {
+                continue;
+            };
+            assert_eq!(
+                super::minimal_be(value),
+                vector.bytes,
+                "vector {}",
+                vector.name,
+            );
+            checked += 1;
+        }
+        assert!(checked >= 4, "only {checked} u64 value vectors ran");
+    }
+
+    #[test]
+    fn the_amount_encoder_never_emits_a_leading_zero() {
+        for value in [0u64, 1, 255, 256, 1 << 32, u64::MAX] {
+            let bytes = super::minimal_be(value);
+            assert_ne!(bytes.first(), Some(&0), "value {value} encoded {bytes:?}");
+        }
     }
 }
