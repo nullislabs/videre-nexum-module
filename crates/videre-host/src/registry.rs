@@ -1304,8 +1304,6 @@ mod tests {
         assert_eq!(registry.inner.watch_limit.max_entries, 1);
     }
 
-    // ── status watch + polling ────────────────────────────────────────
-
     #[tokio::test]
     async fn accepted_submission_goes_under_status_watch() {
         let calls = Arc::new(StubCalls::default());

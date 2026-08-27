@@ -30,8 +30,6 @@ use videre_host::{
 use videre_status_body::{INTENT_STATUS_KIND, IntentStatusUpdate, StatusBody};
 use wasmtime::component::Linker;
 
-// ── fixtures ──────────────────────────────────────────────────────────
-
 /// The venue id the tests register their adapter under.
 fn cow() -> VenueId {
     VenueId::new("cow").expect("valid venue id")
@@ -137,8 +135,6 @@ fn sections(toml: &str) -> ExtensionSections {
     table.into_iter().collect()
 }
 
-// ── the native venue round trip ───────────────────────────────────────
-
 /// Every verb of the keeper-facing seam reaches the registered venue, and
 /// an accepted receipt goes under status watch.
 #[tokio::test]
@@ -215,8 +211,6 @@ async fn an_unregistered_venue_is_unknown_and_a_dead_one_unavailable() {
     ));
 }
 
-// ── routing policy ────────────────────────────────────────────────────
-
 /// The quota the composition root builds the registry with rate-limits a
 /// caller once its budget is spent, per caller.
 #[tokio::test]
@@ -283,8 +277,6 @@ async fn the_watch_limit_bounds_the_status_watch_set() {
     assert!(matches!(err, VenueError::Unavailable(_)));
 }
 
-// ── the keeper handshake ──────────────────────────────────────────────
-
 /// A keeper boots only when every registered venue decodes the one body
 /// version it encodes; the refusal names the version and the decoded set.
 #[test]
@@ -321,8 +313,6 @@ fn a_venue_that_declares_no_versions_never_satisfies_a_declaring_keeper() {
     Extension::<MockTypes>::admit_worker(&videre, "keeper", &ExtensionSections::new())
         .expect("an undeclared keeper opts out of the handshake");
 }
-
-// ── the status-poll source ────────────────────────────────────────────
 
 /// Open the platform's sources over a fresh task set, demanding `kinds`.
 fn open_sources(videre: &Videre, kinds: &BTreeSet<String>) -> usize {
@@ -414,8 +404,6 @@ async fn the_status_poll_source_stays_closed_without_demand_or_a_venue() {
         "no registered venue, no source",
     );
 }
-
-// ── the client import ─────────────────────────────────────────────────
 
 /// The keeper-facing `videre:venue/client` import adds to a worker linker,
 /// beside the capability and trigger kinds the platform declares.
