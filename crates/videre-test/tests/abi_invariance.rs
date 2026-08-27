@@ -1,76 +1,14 @@
-//! Oracle for the component-model invariance rule.
-//!
-//! # What this pins
-//!
-//! The WebAssembly Component Model relaxes subtyping only for `module`,
-//! `instance` and `component` types. The data types are invariant: a
-//! `record`, a `variant`, an `enum` and a `flags` must match structurally,
-//! field for field and case for case. There is no width subtyping on a
-//! record, so a consumer cannot "just ignore" a new field.
-//!
-//! This test builds that rule into the gate. It extracts the embedded WIT
-//! from a real component, applies one mutation at a time to a copy of that
-//! WIT, and asks `wasm-tools component targets` whether the unchanged
-//! component still targets the mutated world.
-//!
-//! | Mutation                              | Expected |
-//! |---------------------------------------|----------|
-//! | baseline, unmodified                  | targets  |
-//! | add a field to a record               | rejected |
-//! | add a case to a variant               | rejected |
-//! | rename a record field                 | rejected |
-//! | add a function to an imported interface | targets  |
-//! | add a function the world must export  | rejected |
-//!
-//! This test re-extracts its baseline from the component on every run, so
-//! it is self-referential by design. It pins the rule, not the current
-//! shape of the packages under `wit/`. A field added to `wit/` moves the
-//! component and its embedded WIT together, and this test stays green. The
-//! rule is what must not be forgotten.
-//!
-//! # Why it matters
-//!
-//! A written versioning policy once claimed that "a new record field lowers
-//! into the canonical ABI without disturbing the existing fields, so record
-//! growth is safe for a consumer that ignores it". That claim is false, and
-//! the table above is the counter-evidence.
-//!
-//! The rule this test defends: every data-shape change to a shared WIT
-//! package is a major version bump. Adding a field, adding a variant case,
-//! adding an enum case, adding a flag and renaming anything all break every
-//! component already built against the old shape. The table exercises the
-//! record, the variant and the rename; the enum and the flags follow the
-//! same invariance rule.
-//!
-//! The only safe additive move is to add a function, and only host-first.
-//! A component tolerates an import it does not use, so the host may offer a
-//! new function before any guest calls it. The reverse never holds. The
-//! last row proves it: a world that demands one more export rejects the
-//! component at once, so a guest can never lead the host.
-//!
-//! # Honest direction
-//!
-//! A conformance test that passes because every case fails proves nothing.
-//! The imported-function row is the control: it must report `targets`. If
-//! the harness breaks, that row turns red, so a silently broken harness
-//! cannot masquerade as a green gate.
-//!
-//! Each rejected row also asserts on the reason `wasm-tools` prints. A
-//! nonzero exit alone is weak evidence, because a mutation that produced
-//! unparseable WIT would also exit nonzero and would prove nothing about
-//! the ABI. Each mutation anchor must further match the embedded WIT
-//! exactly once, so a stale anchor fails loudly rather than degrading into
-//! a no-op that trivially passes.
+//! Pins component-model data-type invariance: a record, a variant and a
+//! field name may not change, and only an imported function is additive.
+//! Each row mutates the embedded WIT and runs `wasm-tools component targets`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Path under this workspace root.
 ///
-/// The root is the nearest ancestor whose `Cargo.toml` declares a
-/// `[workspace]`. Nearest, not topmost: a git worktree of this repo nests
-/// under the main checkout, and the topmost match would resolve to the
-/// main checkout's `target/` rather than the worktree's own.
+/// The root is the nearest `[workspace]` ancestor, not the topmost, because
+/// a git worktree of this repo nests under the main checkout.
 fn workspace_path(relative: &str) -> PathBuf {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     manifest
@@ -85,8 +23,7 @@ fn workspace_path(relative: &str) -> PathBuf {
 
 /// Path to a module's `.wasm` artefact under the workspace target dir.
 ///
-/// A missing artefact is a hard failure under CI (the gate may not skip
-/// itself) and a soft skip locally.
+/// A missing artefact is a hard failure under CI and a soft skip locally.
 fn module_wasm_or_skip(module_name: &str) -> Option<PathBuf> {
     let artifact = module_name.replace('-', "_");
     let p = workspace_path(&format!("target/wasm32-wasip2/release/{artifact}.wasm"));
@@ -107,9 +44,7 @@ fn module_wasm_or_skip(module_name: &str) -> Option<PathBuf> {
 
 /// True when `wasm-tools` is on `PATH` and runnable.
 ///
-/// A missing tool is a hard failure under CI and a soft skip locally, the
-/// same way a missing module wasm is. The CI workflow installs the tool for
-/// this reason; a gate that skips itself is not a gate.
+/// A missing tool is a hard failure under CI and a soft skip locally.
 fn wasm_tools_present() -> bool {
     match Command::new("wasm-tools").arg("--version").output() {
         Ok(out) if out.status.success() => true,
@@ -164,9 +99,8 @@ impl Outcome {
 enum Expect {
     /// The component still targets the mutated world.
     Targets,
-    /// The tool rejects the component, and says so for this reason. The
-    /// substring keeps a rejected row honest: a parse error would also exit
-    /// nonzero, and it would prove nothing about the ABI.
+    /// The tool rejects the component for this reason. The substring
+    /// separates an ABI rejection from a WIT parse error.
     RejectedBecause(&'static str),
 }
 
@@ -195,9 +129,8 @@ fn targets(dir: &Path, wit: &str, component: &Path) -> Outcome {
 
 /// Replace the single occurrence of `anchor` in `wit` with `replacement`.
 ///
-/// The uniqueness assertion is load-bearing. A mutation that silently
-/// matched nothing would leave the WIT unchanged, and its row would then
-/// pass for the wrong reason.
+/// The anchor must be unique. A stale anchor would leave the WIT unchanged,
+/// and its row would pass for the wrong reason.
 fn mutate(wit: &str, anchor: &str, replacement: &str) -> String {
     assert_eq!(
         wit.matches(anchor).count(),
@@ -207,8 +140,7 @@ fn mutate(wit: &str, anchor: &str, replacement: &str) -> String {
     wit.replace(anchor, replacement)
 }
 
-/// Records, variants and field names are invariant in the component ABI;
-/// only a new import-side function is additive.
+/// Runs the mutation matrix over the echo-client component.
 #[test]
 fn shared_wit_data_shapes_are_invariant_and_only_imported_functions_are_additive() {
     let Some(component) = module_wasm_or_skip("echo-client") else {
@@ -221,13 +153,11 @@ fn shared_wit_data_shapes_are_invariant_and_only_imported_functions_are_additive
     let base = embedded_wit(&component);
     let scratch = tempfile::tempdir().expect("create the scratch directory");
 
-    // The baseline must target its own world. If it does not, every other
-    // row below is meaningless, so fail loudly here.
+    // The baseline must target its own world, or every row below is void.
     if let Outcome::Rejected(why) = targets(&scratch.path().join("baseline"), &base, &component) {
         panic!("the unmodified component must target its own embedded WIT: {why}");
     }
 
-    // Each row: a name, the mutated WIT, and what the tool must say.
     let cases: Vec<(&str, String, Expect)> = vec![
         (
             "add a field to a record",

@@ -68,9 +68,7 @@ jobs:
       - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
         with:
           tool: nextest
-      # `crates/videre-test/tests/abi_invariance.rs` drives `wasm-tools component
-      # targets` to pin the component ABI. That test hard-fails when the tool is
-      # absent under CI, so install it here rather than let the gate skip itself.
+      # `tests/abi_invariance.rs` hard-fails without `wasm-tools` under CI.
       - uses: taiki-e/install-action@43aecc8d72668fbcfe75c31400bc4f890f1c5853 # v2.83.2
         with:
           tool: wasm-tools@1.245.0
