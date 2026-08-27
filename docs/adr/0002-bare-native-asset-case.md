@@ -23,6 +23,7 @@ The restructuring goes further than the ratify-as-invalid option: the invalid st
 ## Consequences
 
 No consumer validates a native payload, because none exists.
+`AssetAmount::native` in `videre_sdk::value_flow` is the SDK spelling of the case, and it takes an amount and nothing else.
 `erc721`, `erc1155`, `service`, and `offchain` are planned as separate 0.2+ cases, never as payloads of `native`.
-The variant is closed at the value-flow 1.0 freeze; case growth is a new major version.
+The variant is closed at the `videre:value-flow@0.1.0` freeze; case growth needs a new major version, which is `0.2.0` under 0.x semver.
 The freeze semantics themselves are recorded separately (tracker issue #47).

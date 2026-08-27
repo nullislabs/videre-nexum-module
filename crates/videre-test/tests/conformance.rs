@@ -3,7 +3,8 @@
 
 use nexum_sdk::host::ChainHost;
 use nexum_sdk::http::Fetch;
-use videre_sdk::value_flow::{Asset, AssetAmount};
+use nexum_sdk::prelude::U256;
+use videre_sdk::value_flow::{Asset, AssetAmount, decode_uint};
 use videre_sdk::{
     AuthScheme, Config, Fault, IntentHeader, IntentStatus, Quotation, SubmitOutcome, VenueAdapter,
     VenueError,
@@ -11,7 +12,9 @@ use videre_sdk::{
 use videre_test::reference::{
     CODEC_VECTORS_JSON, HEADER_GOLDENS_JSON, ReferenceBody, derive_reference_header,
 };
-use videre_test::{CodecVectors, HeaderGoldens, MockTransport};
+use videre_test::{
+    CodecVectors, HeaderGoldens, MockTransport, UINT_VECTORS_JSON, UintExpectation, UintVectors,
+};
 
 /// The reference venue implemented through the SDK trait, driven by the kit's mocks.
 struct ReferenceAdapter;
@@ -136,6 +139,48 @@ fn mock_transport_drives_seam_shaped_adapter_logic() {
         .map_err(VenueError::from)
         .unwrap_err();
     assert!(matches!(denied, VenueError::Denied(_)));
+}
+
+#[test]
+fn the_sdk_uint_codec_conforms_to_the_published_vectors() {
+    UintVectors::from_json(UINT_VECTORS_JSON)
+        .expect("the published vector file parses")
+        .assert_conforms(decode_uint);
+}
+
+#[test]
+fn a_tolerant_uint_decoder_is_caught_by_the_published_vectors() {
+    // The classic uint bug: normalise the padding away instead of
+    // rejecting it. The reject vectors exist to fail exactly this.
+    let tolerant = |bytes: &[u8]| -> Result<U256, &'static str> {
+        if bytes.len() > 32 {
+            return Err("too long");
+        }
+        Ok(U256::from_be_slice(bytes))
+    };
+    let vectors = UintVectors::from_json(UINT_VECTORS_JSON).unwrap();
+    let report = vectors.check(tolerant).unwrap_err();
+    let failed: Vec<&str> = report
+        .violations
+        .iter()
+        .map(|violation| violation.vector.as_str())
+        .collect();
+    let rejects: Vec<&str> = vectors
+        .vectors
+        .iter()
+        .filter(|vector| vector.expect == UintExpectation::Reject && vector.bytes.len() <= 32)
+        .map(|vector| vector.name.as_str())
+        .collect();
+    assert_eq!(failed, rejects, "report: {report}");
+}
+
+#[test]
+fn uint_vectors_round_trip_through_disk() {
+    let vectors = UintVectors::from_json(UINT_VECTORS_JSON).unwrap();
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let path = dir.path().join("uint.json");
+    vectors.write(&path).expect("the file writes");
+    assert_eq!(UintVectors::load(&path).expect("the file loads"), vectors);
 }
 
 #[test]

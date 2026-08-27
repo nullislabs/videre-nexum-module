@@ -347,33 +347,45 @@ mod conformance {
     #[test]
     fn the_amount_encoder_matches_the_published_uint_vectors() {
         // The native venue keeps its own minimal encoder, so the published
-        // vectors are what pins it to ADR 0001. Every value vector that
-        // fits a u64 must come back byte for byte.
+        // vectors are what pins it to ADR 0001. This encoder takes a u64,
+        // so every value vector inside that width must come back byte for
+        // byte, and the count must account for all of them.
         let vectors = UintVectors::from_json(UINT_VECTORS_JSON).expect("the vectors parse");
-        let mut checked = 0;
-        for vector in &vectors.vectors {
+        let in_width: Vec<_> = vectors
+            .vectors
+            .iter()
+            .filter(|vector| {
+                matches!(vector.expect, UintExpectation::Value(_)) && vector.bytes.len() <= 8
+            })
+            .collect();
+        assert!(
+            in_width.len() >= 4,
+            "only {} value vectors fit a u64",
+            in_width.len(),
+        );
+        for vector in in_width {
             let UintExpectation::Value(published) = &vector.expect else {
-                continue;
+                unreachable!("filtered to value vectors");
             };
-            let Ok(value) = published.parse::<u64>() else {
-                continue;
-            };
+            let value: u64 = published
+                .parse()
+                .expect("a vector of 8 bytes or less fits a u64");
             assert_eq!(
                 super::minimal_be(value),
                 vector.bytes,
                 "vector {}",
                 vector.name,
             );
-            checked += 1;
         }
-        assert!(checked >= 4, "only {checked} u64 value vectors ran");
     }
 
     #[test]
-    fn the_amount_encoder_never_emits_a_leading_zero() {
-        for value in [0u64, 1, 255, 256, 1 << 32, u64::MAX] {
+    fn the_amount_encoder_is_minimal_at_every_width() {
+        assert_eq!(super::minimal_be(0), Vec::<u8>::new(), "zero is empty");
+        for value in [1u64, 255, 256, 1 << 32, u64::MAX] {
             let bytes = super::minimal_be(value);
-            assert_ne!(bytes.first(), Some(&0), "value {value} encoded {bytes:?}");
+            assert!(!bytes.is_empty(), "value {value} encoded empty");
+            assert_ne!(bytes[0], 0, "value {value} encoded {bytes:?}");
         }
     }
 }
