@@ -13,6 +13,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures::future::BoxFuture;
+use nexum_runtime::ModuleId;
+use nexum_runtime::error::InvalidModuleName;
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::warn;
 use videre_status_body::StatusBody;
@@ -46,17 +48,21 @@ pub struct VenueId(#[as_ref(str)] String);
 
 /// A candidate venue id failed validation at a boundary.
 #[derive(Debug, thiserror::Error)]
-#[error("venue id must not be empty or whitespace-padded (got {0:?})")]
-pub struct InvalidVenueId(String);
+#[error("invalid venue id: {0}")]
+pub struct InvalidVenueId(#[from] InvalidModuleName);
 
 impl VenueId {
-    /// Validating constructor. A padded id is rejected, never trimmed.
-    pub fn new(id: impl Into<String>) -> Result<Self, InvalidVenueId> {
-        let id = id.into();
-        if id.is_empty() || id.trim().len() != id.len() {
-            return Err(InvalidVenueId(id));
-        }
-        Ok(Self(id))
+    /// Validating constructor, delegating to [`ModuleId::parse`]: a venue
+    /// id is a manifest namespace, so it obeys the same rule. A padded id
+    /// is rejected, never trimmed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidVenueId`] when `id` is blank, whitespace-padded,
+    /// or reaches outside its own namespace.
+    pub fn new(id: impl AsRef<str>) -> Result<Self, InvalidVenueId> {
+        let id = ModuleId::parse(id.as_ref())?;
+        Ok(Self(id.as_str().to_owned()))
     }
 
     /// The id at its wire spelling.

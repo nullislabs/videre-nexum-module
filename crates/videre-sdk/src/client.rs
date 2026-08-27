@@ -31,28 +31,22 @@ pub struct InvalidVenueId(String);
 impl VenueId {
     /// Wrap a static id without allocating.
     ///
-    /// # Panics
-    ///
-    /// On an invalid id, at const evaluation when the call site is const:
-    ///
-    /// ```compile_fail
-    /// use videre_sdk::VenueId;
-    /// const ID: VenueId = VenueId::from_static(" demo");
-    /// ```
+    /// Does not validate. `#[videre_sdk::venue]` rejects a padded literal
+    /// at expansion, and the host rejects one at registration.
     #[must_use]
     pub const fn from_static(id: &'static str) -> Self {
-        assert!(
-            !padded(id),
-            "venue id must not be empty or whitespace-padded"
-        );
         Self(Cow::Borrowed(id))
     }
 
     /// Validating constructor. A padded id is rejected, never trimmed,
     /// because a trim would collapse two spellings into one id.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidVenueId`] when `id` is empty or whitespace-padded.
     pub fn new(id: impl Into<Cow<'static, str>>) -> Result<Self, InvalidVenueId> {
         let id = id.into();
-        if padded(&id) {
+        if id.is_empty() || id != id.trim() {
             return Err(InvalidVenueId(id.into_owned()));
         }
         Ok(Self(id))
@@ -62,53 +56,6 @@ impl VenueId {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
-    }
-}
-
-/// True when `id` is empty, or opens or closes on Unicode whitespace.
-/// The boundary chars are decoded by hand because `str::chars` is not const.
-const fn padded(id: &str) -> bool {
-    let bytes = id.as_bytes();
-    if bytes.is_empty() {
-        return true;
-    }
-    // Walk back over the trailing char's continuation bytes.
-    let mut last = bytes.len() - 1;
-    while bytes[last] & 0xC0 == 0x80 {
-        last -= 1;
-    }
-    is_whitespace(code_point_at(bytes, 0)) || is_whitespace(code_point_at(bytes, last))
-}
-
-/// Decode the code point that starts at `at`. The caller must give a char
-/// boundary, which guarantees the continuation bytes are present.
-const fn code_point_at(bytes: &[u8], at: usize) -> u32 {
-    let b0 = bytes[at] as u32;
-    match b0 {
-        0x00..=0x7F => b0,
-        0xC2..=0xDF => ((b0 & 0x1F) << 6) | (bytes[at + 1] as u32 & 0x3F),
-        0xE0..=0xEF => {
-            ((b0 & 0x0F) << 12)
-                | ((bytes[at + 1] as u32 & 0x3F) << 6)
-                | (bytes[at + 2] as u32 & 0x3F)
-        }
-        0xF0..=0xF4 => {
-            ((b0 & 0x07) << 18)
-                | ((bytes[at + 1] as u32 & 0x3F) << 12)
-                | ((bytes[at + 2] as u32 & 0x3F) << 6)
-                | (bytes[at + 3] as u32 & 0x3F)
-        }
-        // Unreachable on a char boundary. A surrogate, so `char::from_u32`
-        // refuses it and the id is not padded.
-        _ => 0xD800,
-    }
-}
-
-/// `char::is_whitespace` over a raw code point.
-const fn is_whitespace(cp: u32) -> bool {
-    match char::from_u32(cp) {
-        Some(c) => c.is_whitespace(),
-        None => false,
     }
 }
 
@@ -433,7 +380,7 @@ pub enum ClientError {
 mod tests {
     use std::task::Poll;
 
-    use super::{VenueId, padded, poll_once};
+    use super::{VenueId, poll_once};
 
     #[test]
     fn blank_venue_id_is_rejected_at_construction() {
@@ -454,8 +401,20 @@ mod tests {
         assert!(" demo".parse::<VenueId>().is_err());
         assert!(VenueId::try_from("demo\n").is_err());
         assert!(VenueId::try_from("\tdemo".to_owned()).is_err());
-        assert!(VenueId::new("demo\u{a0}").is_err());
-        assert!(VenueId::new("\u{2028}demo".to_owned()).is_err());
+        // Unicode whitespace at every width `str::trim` recognises.
+        for ws in ["\u{20}", "\u{a0}", "\u{2028}", "\u{3000}"] {
+            assert!(VenueId::new(format!("{ws}demo")).is_err(), "{ws:?} leads");
+            assert!(VenueId::new(format!("demo{ws}")).is_err(), "{ws:?} trails");
+            assert!(VenueId::new(ws).is_err(), "{ws:?} alone");
+        }
+        // Non-whitespace at every width, interior whitespace included.
+        for ok in ["A", "\u{c0}", "\u{4e00}", "\u{1f600}"] {
+            assert!(
+                VenueId::new(format!("{ok}demo{ok}")).is_ok(),
+                "{ok:?} wraps"
+            );
+            assert!(VenueId::new(ok).is_ok(), "{ok:?} alone");
+        }
         assert!(VenueId::new("demo venue").is_ok());
         // The error carries the untrimmed spelling back.
         let err = VenueId::new(" demo ".to_owned()).expect_err("padded");
@@ -476,23 +435,6 @@ mod tests {
             "demo"
         );
         assert_eq!(AsRef::<str>::as_ref(&VenueId::from_static("demo")), "demo");
-    }
-
-    #[test]
-    fn padded_walks_every_utf8_width_at_both_ends() {
-        // Whitespace at each width it encodes to. Unicode has no 4-byte
-        // whitespace.
-        for ws in ["\u{20}", "\u{a0}", "\u{2028}", "\u{3000}"] {
-            assert!(padded(&format!("{ws}demo")), "{ws:?} leads");
-            assert!(padded(&format!("demo{ws}")), "{ws:?} trails");
-            assert!(padded(ws), "{ws:?} alone");
-        }
-        // Non-whitespace at every width, including 4 bytes.
-        for ok in ["A", "\u{c0}", "\u{4e00}", "\u{1f600}"] {
-            assert!(!padded(&format!("{ok}demo{ok}")), "{ok:?} wraps");
-            // A lone multi-byte char: the backward walk lands on index 0.
-            assert!(!padded(ok), "{ok:?} alone");
-        }
     }
 
     #[test]
