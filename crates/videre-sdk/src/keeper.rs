@@ -173,11 +173,25 @@ impl<S, P: VenueTransport> Keeper<S, P> {
                 Outcome::Backoff { seconds } => RetryAction::Backoff { seconds },
                 Outcome::Drop => RetryAction::Drop,
             };
-            match action {
-                RetryAction::Drop => report.dropped += 1,
-                _ => report.retried += 1,
-            }
             retrier.apply(commitment, action, tick)?;
+            // Bucket by the Retrier's effect, not by the action: the tick
+            // that leaves no commitment behind counts as dropped, so a
+            // `DropOnRepeat` retirement is visible under `dropped`.
+            let present = match commitments.get(commitment) {
+                Ok(row) => row.is_some(),
+                // Bookkeeping only: a read fault here must not discard
+                // the reconcile tally and the unsigned txs the run
+                // already holds, so fall back to the action.
+                Err(fault) => {
+                    tracing::error!(%fault, "commitment read failed after a retry action");
+                    !matches!(action, RetryAction::Drop)
+                }
+            };
+            if present {
+                report.retried += 1;
+            } else {
+                report.dropped += 1;
+            }
         }
         Ok(report)
     }
@@ -271,7 +285,10 @@ pub struct RunReport {
     /// Commitments left in place for a later tick, plus submit arms the
     /// reconcile pass already owns this tick.
     pub retried: usize,
-    /// Commitments dropped.
+    /// Commitments no longer in the set after this run's retry action.
+    /// Buckets follow the [`Retrier`] effect, not the action, so the
+    /// repeat tick that retires a [`RetryAction::DropOnRepeat`]
+    /// commitment counts here.
     pub dropped: usize,
     /// Stranded reservations the reconcile pass committed this tick.
     pub reconciled_committed: usize,
@@ -609,6 +626,80 @@ mod tests {
                 .expect("list reads")
                 .is_empty()
         );
+    }
+
+    /// Retires the commitment inside the poll, then asks for a retry.
+    struct RetiringSource;
+
+    impl nexum_sdk::keeper::Poller<MockLocalStore> for RetiringSource {
+        type Outcome = Outcome;
+
+        fn poll(
+            &self,
+            host: &MockLocalStore,
+            commitment: CommitmentRef<'_>,
+            _params: &[u8],
+            _tick: &Tick,
+        ) -> Outcome {
+            CommitmentSet::new(host)
+                .remove(commitment)
+                .expect("mock store removes the commitment");
+            Outcome::WaitBlock
+        }
+    }
+
+    #[test]
+    fn a_retired_commitment_counts_as_dropped_not_retried() {
+        let host = MockLocalStore::default();
+        put_commitment(&host);
+        let venue = StubVenue::new(Ok(SubmitOutcome::Accepted(vec![1])));
+        let keeper = Keeper::new(RetiringSource, &venue, "stub");
+
+        // The action is a retry, but the tick leaves no commitment behind,
+        // so the same effect check that makes a `DropOnRepeat` retirement
+        // visible under `dropped` buckets this tick there too.
+        let report = run(keeper.run(&host, &TICK)).expect("keeper runs");
+        assert_eq!(report.dropped, 1);
+        assert_eq!(report.retried, 0);
+        assert!(venue.submitted.borrow().is_empty());
+        assert!(
+            CommitmentSet::new(&host)
+                .list()
+                .expect("list reads")
+                .is_empty()
+        );
+    }
+
+    /// Arms a commitment-store fault, then asks for a retry.
+    struct FaultArmingSource;
+
+    impl nexum_sdk::keeper::Poller<MockLocalStore> for FaultArmingSource {
+        type Outcome = Outcome;
+
+        fn poll(
+            &self,
+            host: &MockLocalStore,
+            _commitment: CommitmentRef<'_>,
+            _params: &[u8],
+            _tick: &Tick,
+        ) -> Outcome {
+            host.fail_on("commitment:", Fault::unavailable("store down"));
+            Outcome::WaitBlock
+        }
+    }
+
+    #[test]
+    fn a_bucketing_read_fault_falls_back_to_the_action() {
+        let host = MockLocalStore::default();
+        put_commitment(&host);
+        let venue = StubVenue::new(Ok(SubmitOutcome::Accepted(vec![1])));
+        let keeper = Keeper::new(FaultArmingSource, &venue, "stub");
+
+        // The effect check is bookkeeping, so its fault buckets by the
+        // action instead of discarding the run.
+        let report = run(keeper.run(&host, &TICK)).expect("bucketing fault must not abort the run");
+        assert_eq!(report.retried, 1);
+        assert_eq!(report.dropped, 0);
     }
 
     #[test]
