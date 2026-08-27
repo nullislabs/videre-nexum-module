@@ -18,6 +18,7 @@ A venue is a native Rust adapter. It implements `videre_host::VenueInvoker`, and
 | `echo-venue`, `flaky-venue` | The reference venue adapter and the evil-by-design venue fixture for the recovery tests. Both are native Rust; the workspace `members` list names the directory of each. |
 | `wit/` | The `videre:venue`, `videre:types`, and `videre:value-flow` WIT packages, plus vendored cross-repo deps under `wit/deps/`. |
 | `extensions.toml` | Client-capability registry: the per-namespace rows the component world synthesis emits beyond the core `nexum:host` table. |
+| `docs/` | Architecture decision records under `docs/adr/`; historical design documents and runbooks under `docs/design/`. |
 
 ## Development
 

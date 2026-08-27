@@ -26,6 +26,10 @@ A keeper is still a guest wasm component, and it calls a registered venue throug
 - `echo-client` and `echo-keeper`: the reference keeper guest modules, each one driving a venue through `videre:venue/client`.
 - `echo-venue` and `flaky-venue`: the reference venue adapter and the evil-by-design venue fixture for the recovery tests.
 - `wit/`: the `videre:venue`, `videre:types`, and `videre:value-flow` WIT packages, plus the cross-repo deps vendored under `wit/deps/`.
+- `docs/`: architecture decision records under `docs/adr/`, and design documents and runbooks under `docs/design/`; the `README.md` in each one states the local convention.
+
+The design documents under `docs/design/` are historical and describe the pre-carve monorepo.
+`AGENTS.md` and the `wit/` tree win over any of them.
 
 `echo-venue` and `flaky-venue` are native Rust, so they no longer build to wasm.
 Read the `members` list in the workspace `Cargo.toml` for the directory each crate lives in.
