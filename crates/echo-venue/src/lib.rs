@@ -179,12 +179,9 @@ fn zero_native() -> AssetAmount {
     }
 }
 
-/// Big-endian bytes with leading zeros trimmed: the canonical `uint`
-/// spelling of ADR 0001, where an empty list is zero.
+/// The canonical `uint` of ADR 0001: minimal big-endian, zero is empty.
 ///
-/// A native venue does not link the guest SDK, so it does not reach
-/// `videre_sdk::value_flow::encode_uint`. The test below holds this local
-/// encoder to the same published vectors that the SDK codec answers to.
+/// A native venue does not link the guest SDK, so it keeps a local encoder.
 fn minimal_be(value: u64) -> Vec<u8> {
     let bytes = value.to_be_bytes();
     let first = bytes.iter().position(|byte| *byte != 0);
@@ -346,10 +343,7 @@ mod conformance {
 
     #[test]
     fn the_amount_encoder_matches_the_published_uint_vectors() {
-        // The native venue keeps its own minimal encoder, so the published
-        // vectors are what pins it to ADR 0001. This encoder takes a u64,
-        // so every value vector inside that width must come back byte for
-        // byte, and the count must account for all of them.
+        // The encoder takes a u64, so only the vectors inside that width apply.
         let vectors = UintVectors::from_json(UINT_VECTORS_JSON).expect("the vectors parse");
         let in_width: Vec<_> = vectors
             .vectors

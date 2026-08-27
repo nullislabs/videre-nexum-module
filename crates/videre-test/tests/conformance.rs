@@ -150,8 +150,7 @@ fn the_sdk_uint_codec_conforms_to_the_published_vectors() {
 
 #[test]
 fn a_tolerant_uint_decoder_is_caught_by_the_published_vectors() {
-    // The classic uint bug: normalise the padding away instead of
-    // rejecting it. The reject vectors exist to fail exactly this.
+    // The classic uint bug: normalise the padding away instead of rejecting it.
     let tolerant = |bytes: &[u8]| -> Result<U256, &'static str> {
         if bytes.len() > 32 {
             return Err("too long");

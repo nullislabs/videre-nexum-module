@@ -7,9 +7,8 @@
 //! - [`HeaderGoldens`]: published bodies paired with the header a
 //!   conforming `derive-header` projects, in the [`GoldenHeader`] mirror
 //!   types.
-//! - [`UintVectors`]: the canonical value-flow `uint` encoding as
-//!   published vectors; the reject vectors fail a decoder that
-//!   tolerates a non-minimal encoding.
+//! - [`UintVectors`]: published vectors for the canonical value-flow
+//!   `uint` encoding.
 //! - [`MockTransport`]: the chain and outbound-HTTP transports as
 //!   programmable in-memory mocks behind the SDK seams.
 //!

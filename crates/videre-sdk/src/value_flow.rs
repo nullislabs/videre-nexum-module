@@ -1,10 +1,8 @@
-//! The value-flow wire types, re-exported from
-//! [`bindings`](crate::bindings) with the canonical `uint` codec so
-//! callers never hand-roll the encoding.
+//! The value-flow wire types from [`bindings`](crate::bindings), plus the
+//! canonical `uint` codec so callers never hand-roll the encoding.
 
-// `Address` stays fully qualified below: the glob re-export publishes a
-// value-flow `Address` alias, and a private import of the nexum type
-// would shadow it.
+// `Address` stays fully qualified below, because importing it would shadow the
+// value-flow `Address` that the glob re-export publishes.
 use nexum_sdk::prelude::U256;
 
 pub use crate::bindings::videre::value_flow::types::*;
@@ -13,8 +11,7 @@ pub use crate::bindings::videre::value_flow::types::*;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
 pub enum UintError {
-    /// A leading zero byte; the canonical form is minimal-length and
-    /// zero is the empty list.
+    /// A leading zero byte: the encoding is not minimal.
     #[error("non-minimal uint: leading zero byte")]
     LeadingZero,
     /// The value cannot fit the 32-byte EVM word.
@@ -25,23 +22,18 @@ pub enum UintError {
     },
 }
 
-/// Encode a value as the canonical `uint`: minimal big-endian bytes,
-/// zero as the empty list.
+/// Encode a value as the canonical `uint`: minimal big-endian, zero is empty.
 #[must_use]
 pub fn encode_uint(value: U256) -> Vec<u8> {
     value.to_be_bytes_trimmed_vec()
 }
 
-/// Decode a canonical `uint`, rejecting a non-minimal encoding rather
-/// than normalising it.
-///
-/// The width is checked before the padding, so an over-long encoding
-/// reports [`UintError::Overflow`] whatever its first byte is.
+/// Decode a canonical `uint`, rejecting a non-minimal encoding.
 ///
 /// # Errors
 ///
-/// Returns [`UintError::Overflow`] for an encoding past the 32-byte EVM
-/// word, and [`UintError::LeadingZero`] for a padded encoding.
+/// Returns [`UintError::Overflow`] past the 32-byte EVM word, checked first,
+/// and [`UintError::LeadingZero`] for a padded encoding.
 pub fn decode_uint(bytes: &[u8]) -> Result<U256, UintError> {
     if bytes.len() > 32 {
         return Err(UintError::Overflow { len: bytes.len() });
@@ -64,8 +56,7 @@ impl AssetAmount {
         }
     }
 
-    /// A settlement-chain gas-token amount, in the canonical `uint`
-    /// encoding.
+    /// A settlement-chain gas-token amount, in the canonical `uint` encoding.
     #[must_use]
     pub fn native(amount: U256) -> Self {
         Self {
@@ -74,16 +65,11 @@ impl AssetAmount {
         }
     }
 
-    /// The amount as an integer, holding the wire bytes to the canonical
-    /// encoding.
-    ///
-    /// This is the reading side of the rule: a consumer that compares or
-    /// thresholds an amount decodes it here rather than comparing bytes.
+    /// The amount as an integer. Compare amounts through this, not as bytes.
     ///
     /// # Errors
     ///
-    /// Returns the [`UintError`] when the bytes are not a canonical
-    /// `uint`.
+    /// Returns the [`UintError`] when the bytes are not a canonical `uint`.
     pub fn value(&self) -> Result<U256, UintError> {
         decode_uint(&self.amount)
     }
@@ -119,8 +105,7 @@ mod tests {
         let mut bytes = vec![0x01];
         bytes.extend([0x00; 32]);
         assert_eq!(decode_uint(&bytes), Err(UintError::Overflow { len: 33 }));
-        // The width is checked first, so padding does not mask the
-        // overflow.
+        // Width is checked first, so padding does not mask the overflow.
         assert_eq!(
             decode_uint(&[0x00; 40]),
             Err(UintError::Overflow { len: 40 }),

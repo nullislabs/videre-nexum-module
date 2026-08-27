@@ -1,10 +1,5 @@
-//! Canonical `uint` conformance vectors: the JSON file publishing the
-//! value-flow amount encoding, and the check holding a decoder to it.
-//!
-//! The vectors give the `types.wit` MUST teeth: the canonical form is
-//! minimal big-endian with zero as the empty list (ADR 0001), and the
-//! reject vectors fail any decoder that tolerates a non-minimal
-//! encoding instead of rejecting it.
+//! Canonical `uint` conformance vectors: the published JSON file, and the
+//! check that holds a decoder to ADR 0001.
 
 use std::fmt::{self, Display};
 use std::path::Path;
@@ -101,14 +96,11 @@ impl UintVectors {
 
     /// Check a decoder against every vector, collecting all violations.
     ///
-    /// A `value` vector must decode to the published integer (compared
-    /// through the decimal `Display` form); a `reject` vector must fail
-    /// to decode. An empty set is itself a violation.
+    /// A value is compared as decimal text, and an empty set is a violation.
     ///
     /// # Errors
     ///
-    /// Returns the [`ConformanceReport`] naming every vector the decoder
-    /// failed.
+    /// Returns the [`ConformanceReport`] naming every failed vector.
     pub fn check<V, E>(
         &self,
         decode: impl Fn(&[u8]) -> Result<V, E>,
@@ -205,8 +197,7 @@ mod tests {
         )
     }
 
-    /// Rebuild the published vectors from the shipped encoder and the
-    /// hand-written reject encodings.
+    /// Rebuild the published vectors from the shipped encoder.
     fn build_uint_vectors() -> UintVectors {
         let mut overflow = vec![0x01];
         overflow.extend([0x00; 32]);
@@ -263,8 +254,7 @@ mod tests {
         }
     }
 
-    /// A deliberately tolerant decode that normalises padding away: the
-    /// non-conforming shape the reject vectors exist to catch.
+    /// A tolerant decode that normalises padding away, which must not conform.
     fn tolerant(bytes: &[u8]) -> Result<U256, &'static str> {
         if bytes.len() > 32 {
             return Err("too long");
@@ -385,9 +375,8 @@ mod tests {
         assert!(detail.contains("never empty"));
     }
 
-    /// Rewrite the published file. Run with
-    /// `cargo test -p videre-test -- --ignored regenerate_uint` after a
-    /// deliberate change, then commit the diff.
+    /// Rewrite the published file, then commit the diff. Run with
+    /// `cargo test -p videre-test -- --ignored regenerate_uint`.
     #[test]
     #[ignore = "writes the published fixture file in place"]
     fn regenerate_uint_vectors() {
