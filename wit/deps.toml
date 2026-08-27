@@ -1,21 +1,36 @@
 # Cross-group WIT dependencies, vendored into wit/deps/ by wit-deps.
 #
 # Sources are pinned to the owning repo's rev through the github archive
-# tarball. The nexum-host package lives at wit/nexum-host in the
-# nexum-runtime repo. The tarball unpacks under a nexum-runtime-<rev>/
-# top-level directory.
+# tarball. The sha256 and the sha512 are the digests of the raw tarball
+# bytes. wit-deps checks them whenever it fetches: `wit-deps update`
+# always fetches, while `wit-deps lock` skips the fetch, and with it the
+# digest check, while the vendored tree still matches wit/deps.lock.
 #
-# NOTE: the sha256 and the sha512 below are placeholders, not real
-# digests. wit-deps is not in the dev shell and no CI job runs it, so
-# nothing verifies them. Every build reads the vendored copy under
-# wit/deps/, which is checked in. Install wit-deps, run `wit-deps
-# update`, and record the real digests when the source is next
-# refreshed.
+# The prefix selects the WIT package directory inside the tarball. The
+# nexum-host package lives at wit/nexum-host in the nexum-runtime repo,
+# and the tarball unpacks under a nexum-runtime-<rev>/ top-level
+# directory. The prefix is not digest-covered, and a prefix that matches
+# nothing vendors an empty tree and still exits 0, so only the diff
+# against the checked-in wit/deps/ tree catches a wrong prefix.
 #
-# The vendored wit/deps/nexum-host tree matches wit/nexum-host at the
-# rev above, byte for byte. Compare the two trees after you change
-# either one.
+# Re-vendor flow: change the rev in the url, change the same rev in the
+# prefix, record the new digests from `sha256sum` and `sha512sum` of the
+# new tarball, then run `wit-deps update` at the repo root. Commit
+# wit/deps.toml, wit/deps.lock and wit/deps/ together, then run
+# `just wit-sync` to confirm the committed tree is clean. Run wit-sync
+# on its own for the drift check: it fails while a deliberate re-vendor
+# is still uncommitted, because the tree changed on purpose. A failed
+# resolve leaves wit/deps/<pkg> deleted, so re-run the update once the
+# pins are right.
+#
+# The digests cover a github auto-generated source archive. GitHub does
+# not promise those bytes stay stable, and it has changed its archive
+# gzip settings before. If the wit-sync CI job reports a sha256 mismatch
+# that no change of ours explains, suspect that churn before you suspect
+# tampering: compare the new tarball against the vendored tree, and
+# record the new digests if the WIT files are unchanged.
 [nexum-host]
 url = "https://github.com/nullislabs/nexum-runtime/archive/fd16db7709f01bf06116d98053a894de4b1f4adf.tar.gz"
-sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
-sha512 = "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+sha256 = "416da7e236f2e39056399524f397c80bc232606629cd744ddabc92000b17ad07"
+sha512 = "1b60be6c72473917f103d48d7267d5ec8adc2623d2383591c8652f72b70aaeefa8556068218c57adbd8b48b8eba827306fe36d395d631c98730c4a29d1a60ffb"
+prefix = "nexum-runtime-fd16db7709f01bf06116d98053a894de4b1f4adf/wit/nexum-host"
