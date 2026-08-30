@@ -27,4 +27,7 @@ check() {
 }
 
 check -F $'\xe2\x80\x94' "This edit adds an em-dash. House style bans em-dashes: use an ASCII hyphen, a colon, or split the sentence."
+# A banner is a rule-character run on a comment line. The excluded characters
+# spare a markdown table and a box diagram.
+check -N '^\s*(//|#|<!--|/\*|\*)[^|│┌┐└┘├┤┬┴┼]*[-=_─━═]{4,}[^|│┌┐└┘├┤┬┴┼]*$' "This edit adds a banner or section-divider comment. House style bans banners: a section is a module boundary, split the file or add nothing."
 exit 0
