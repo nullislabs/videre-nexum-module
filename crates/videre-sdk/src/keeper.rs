@@ -646,7 +646,7 @@ mod tests {
         let host = MockLocalStore::default();
         put_commitment(&host);
         let venue = StubVenue::new(Ok(SubmitOutcome::Accepted(vec![1])));
-        let keeper = Keeper::new(RetiringSource, &venue, "stub");
+        let keeper = Keeper::new(RetiringSource, &venue, VenueId::from_static("stub"));
 
         let report = run(keeper.run(&host, &TICK)).expect("keeper runs");
         assert_eq!(report.dropped, 1);
@@ -683,7 +683,7 @@ mod tests {
         let host = MockLocalStore::default();
         put_commitment(&host);
         let venue = StubVenue::new(Ok(SubmitOutcome::Accepted(vec![1])));
-        let keeper = Keeper::new(FaultArmingSource, &venue, "stub");
+        let keeper = Keeper::new(FaultArmingSource, &venue, VenueId::from_static("stub"));
 
         let report = run(keeper.run(&host, &TICK)).expect("bucketing fault must not abort the run");
         assert_eq!(report.retried, 1);
