@@ -7,7 +7,8 @@
 //! crate's tests: regeneration must reproduce them byte for byte.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use videre_sdk::value_flow::{Asset, AssetAmount, Erc20};
+use nexum_sdk::prelude::U256;
+use videre_sdk::value_flow::{Asset, AssetAmount, Erc20, encode_uint};
 use videre_sdk::{AuthScheme, IntentBody, IntentHeader, Settlement, VenueError};
 
 /// The published codec vector file, verbatim.
@@ -71,26 +72,19 @@ pub fn derive_reference_header(body: Vec<u8>) -> Result<IntentHeader, VenueError
                 asset: Asset::Erc20(Erc20 {
                     token: quote.recipient,
                 }),
-                amount: minimal_be(quote.amount_wei),
+                amount: encode_uint(U256::from(quote.amount_wei)),
             },
         ),
     };
     Ok(IntentHeader {
         gives: AssetAmount {
             asset: Asset::Native,
-            amount: minimal_be(amount_wei),
+            amount: encode_uint(U256::from(amount_wei)),
         },
         wants,
         settlement: Settlement { chain: 1 },
         authorisation: AuthScheme::Eip712,
     })
-}
-
-/// Big-endian bytes, leading zeros trimmed; an empty list is zero.
-fn minimal_be(value: u64) -> Vec<u8> {
-    let bytes = value.to_be_bytes();
-    let first = bytes.iter().position(|byte| *byte != 0);
-    first.map_or(Vec::new(), |index| bytes[index..].to_vec())
 }
 
 #[cfg(test)]

@@ -179,8 +179,9 @@ fn zero_native() -> AssetAmount {
     }
 }
 
-/// Big-endian bytes with leading zeros trimmed: the minimal `uint`
-/// spelling, where an empty list is zero.
+/// The canonical `uint` of ADR 0001: minimal big-endian, zero is empty.
+///
+/// A native venue does not link the guest SDK, so it keeps a local encoder.
 fn minimal_be(value: u64) -> Vec<u8> {
     let bytes = value.to_be_bytes();
     let first = bytes.iter().position(|byte| *byte != 0);
@@ -244,7 +245,8 @@ mod conformance {
     use videre_host::bindings::IntentHeader;
     use videre_test::{
         FormatVersion, GoldenAsset, GoldenAssetAmount, GoldenAuthScheme, GoldenHeader,
-        GoldenSettlement, HeaderGolden, HeaderGoldens,
+        GoldenSettlement, HeaderGolden, HeaderGoldens, UINT_VECTORS_JSON, UintExpectation,
+        UintVectors,
     };
 
     fn zero_native() -> GoldenAssetAmount {
@@ -337,5 +339,47 @@ mod conformance {
             }],
         };
         assert!(goldens.check(derive).is_err());
+    }
+
+    #[test]
+    fn the_amount_encoder_matches_the_published_uint_vectors() {
+        // The encoder takes a u64, so only the vectors inside that width apply.
+        let vectors = UintVectors::from_json(UINT_VECTORS_JSON).expect("the vectors parse");
+        let in_width: Vec<_> = vectors
+            .vectors
+            .iter()
+            .filter(|vector| {
+                matches!(vector.expect, UintExpectation::Value(_)) && vector.bytes.len() <= 8
+            })
+            .collect();
+        assert!(
+            in_width.len() >= 4,
+            "only {} value vectors fit a u64",
+            in_width.len(),
+        );
+        for vector in in_width {
+            let UintExpectation::Value(published) = &vector.expect else {
+                unreachable!("filtered to value vectors");
+            };
+            let value: u64 = published
+                .parse()
+                .expect("a vector of 8 bytes or less fits a u64");
+            assert_eq!(
+                super::minimal_be(value),
+                vector.bytes,
+                "vector {}",
+                vector.name,
+            );
+        }
+    }
+
+    #[test]
+    fn the_amount_encoder_is_minimal_at_every_width() {
+        assert_eq!(super::minimal_be(0), Vec::<u8>::new(), "zero is empty");
+        for value in [1u64, 255, 256, 1 << 32, u64::MAX] {
+            let bytes = super::minimal_be(value);
+            assert!(!bytes.is_empty(), "value {value} encoded empty");
+            assert_ne!(bytes[0], 0, "value {value} encoded {bytes:?}");
+        }
     }
 }

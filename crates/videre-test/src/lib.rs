@@ -7,6 +7,8 @@
 //! - [`HeaderGoldens`]: published bodies paired with the header a
 //!   conforming `derive-header` projects, in the [`GoldenHeader`] mirror
 //!   types.
+//! - [`UintVectors`]: published vectors for the canonical value-flow
+//!   `uint` encoding.
 //! - [`MockTransport`]: the chain and outbound-HTTP transports as
 //!   programmable in-memory mocks behind the SDK seams.
 //!
@@ -32,6 +34,7 @@ pub mod reconcile;
 pub mod reference;
 pub mod report;
 pub mod transport;
+pub mod uint;
 
 pub use codec::{CodecVector, CodecVectors, Expectation};
 pub use fixture::{FixtureError, FormatVersion};
@@ -42,3 +45,4 @@ pub use header::{
 pub use reconcile::ReconcileFixture;
 pub use report::{ConformanceReport, Violation};
 pub use transport::{ChainCall, MockChain, MockFetch, MockTransport, RecordedRequest};
+pub use uint::{UINT_VECTORS_JSON, UintExpectation, UintVector, UintVectors};
