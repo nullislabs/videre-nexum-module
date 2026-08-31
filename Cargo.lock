@@ -3166,7 +3166,7 @@ dependencies = [
 [[package]]
 name = "nexum-module-macros"
 version = "0.1.0"
-source = "git+https://github.com/nullislabs/nexum-runtime?rev=fd16db7709f01bf06116d98053a894de4b1f4adf#fd16db7709f01bf06116d98053a894de4b1f4adf"
+source = "git+https://github.com/nullislabs/nexum-runtime?rev=2ed882f21e685921cd27d1edec870e8adbb312aa#2ed882f21e685921cd27d1edec870e8adbb312aa"
 dependencies = [
  "alloy-primitives",
  "nexum-world",
@@ -3179,7 +3179,7 @@ dependencies = [
 [[package]]
 name = "nexum-primitives"
 version = "0.1.0"
-source = "git+https://github.com/nullislabs/nexum-runtime?rev=fd16db7709f01bf06116d98053a894de4b1f4adf#fd16db7709f01bf06116d98053a894de4b1f4adf"
+source = "git+https://github.com/nullislabs/nexum-runtime?rev=2ed882f21e685921cd27d1edec870e8adbb312aa#2ed882f21e685921cd27d1edec870e8adbb312aa"
 dependencies = [
  "const-hex",
  "derive_more",
@@ -3193,7 +3193,7 @@ dependencies = [
 [[package]]
 name = "nexum-runtime"
 version = "0.1.0"
-source = "git+https://github.com/nullislabs/nexum-runtime?rev=fd16db7709f01bf06116d98053a894de4b1f4adf#fd16db7709f01bf06116d98053a894de4b1f4adf"
+source = "git+https://github.com/nullislabs/nexum-runtime?rev=2ed882f21e685921cd27d1edec870e8adbb312aa#2ed882f21e685921cd27d1edec870e8adbb312aa"
 dependencies = [
  "alloy-chains",
  "alloy-primitives",
@@ -3234,7 +3234,7 @@ dependencies = [
 [[package]]
 name = "nexum-runtime-api"
 version = "0.1.0"
-source = "git+https://github.com/nullislabs/nexum-runtime?rev=fd16db7709f01bf06116d98053a894de4b1f4adf#fd16db7709f01bf06116d98053a894de4b1f4adf"
+source = "git+https://github.com/nullislabs/nexum-runtime?rev=2ed882f21e685921cd27d1edec870e8adbb312aa#2ed882f21e685921cd27d1edec870e8adbb312aa"
 dependencies = [
  "futures",
  "nexum-runtime-config",
@@ -3248,7 +3248,7 @@ dependencies = [
 [[package]]
 name = "nexum-runtime-chain"
 version = "0.1.0"
-source = "git+https://github.com/nullislabs/nexum-runtime?rev=fd16db7709f01bf06116d98053a894de4b1f4adf#fd16db7709f01bf06116d98053a894de4b1f4adf"
+source = "git+https://github.com/nullislabs/nexum-runtime?rev=2ed882f21e685921cd27d1edec870e8adbb312aa#2ed882f21e685921cd27d1edec870e8adbb312aa"
 dependencies = [
  "alloy-chains",
  "alloy-primitives",
@@ -3270,7 +3270,7 @@ dependencies = [
 [[package]]
 name = "nexum-runtime-config"
 version = "0.1.0"
-source = "git+https://github.com/nullislabs/nexum-runtime?rev=fd16db7709f01bf06116d98053a894de4b1f4adf#fd16db7709f01bf06116d98053a894de4b1f4adf"
+source = "git+https://github.com/nullislabs/nexum-runtime?rev=2ed882f21e685921cd27d1edec870e8adbb312aa#2ed882f21e685921cd27d1edec870e8adbb312aa"
 dependencies = [
  "alloy-chains",
  "ipnet",
@@ -3285,7 +3285,7 @@ dependencies = [
 [[package]]
 name = "nexum-runtime-http"
 version = "0.1.0"
-source = "git+https://github.com/nullislabs/nexum-runtime?rev=fd16db7709f01bf06116d98053a894de4b1f4adf#fd16db7709f01bf06116d98053a894de4b1f4adf"
+source = "git+https://github.com/nullislabs/nexum-runtime?rev=2ed882f21e685921cd27d1edec870e8adbb312aa#2ed882f21e685921cd27d1edec870e8adbb312aa"
 dependencies = [
  "bytes",
  "http",
@@ -3305,7 +3305,7 @@ dependencies = [
 [[package]]
 name = "nexum-runtime-logs"
 version = "0.1.0"
-source = "git+https://github.com/nullislabs/nexum-runtime?rev=fd16db7709f01bf06116d98053a894de4b1f4adf#fd16db7709f01bf06116d98053a894de4b1f4adf"
+source = "git+https://github.com/nullislabs/nexum-runtime?rev=2ed882f21e685921cd27d1edec870e8adbb312aa#2ed882f21e685921cd27d1edec870e8adbb312aa"
 dependencies = [
  "derive_more",
  "metrics",
@@ -3323,7 +3323,7 @@ dependencies = [
 [[package]]
 name = "nexum-runtime-manifest"
 version = "0.1.0"
-source = "git+https://github.com/nullislabs/nexum-runtime?rev=fd16db7709f01bf06116d98053a894de4b1f4adf#fd16db7709f01bf06116d98053a894de4b1f4adf"
+source = "git+https://github.com/nullislabs/nexum-runtime?rev=2ed882f21e685921cd27d1edec870e8adbb312aa#2ed882f21e685921cd27d1edec870e8adbb312aa"
 dependencies = [
  "alloy-primitives",
  "nexum-primitives",
@@ -3338,7 +3338,7 @@ dependencies = [
 [[package]]
 name = "nexum-runtime-metrics"
 version = "0.1.0"
-source = "git+https://github.com/nullislabs/nexum-runtime?rev=fd16db7709f01bf06116d98053a894de4b1f4adf#fd16db7709f01bf06116d98053a894de4b1f4adf"
+source = "git+https://github.com/nullislabs/nexum-runtime?rev=2ed882f21e685921cd27d1edec870e8adbb312aa#2ed882f21e685921cd27d1edec870e8adbb312aa"
 dependencies = [
  "metrics",
  "metrics-util",
@@ -3348,7 +3348,7 @@ dependencies = [
 [[package]]
 name = "nexum-runtime-store"
 version = "0.1.0"
-source = "git+https://github.com/nullislabs/nexum-runtime?rev=fd16db7709f01bf06116d98053a894de4b1f4adf#fd16db7709f01bf06116d98053a894de4b1f4adf"
+source = "git+https://github.com/nullislabs/nexum-runtime?rev=2ed882f21e685921cd27d1edec870e8adbb312aa#2ed882f21e685921cd27d1edec870e8adbb312aa"
 dependencies = [
  "alloy-primitives",
  "nexum-runtime-api",
@@ -3360,7 +3360,7 @@ dependencies = [
 [[package]]
 name = "nexum-runtime-supervisor"
 version = "0.1.0"
-source = "git+https://github.com/nullislabs/nexum-runtime?rev=fd16db7709f01bf06116d98053a894de4b1f4adf#fd16db7709f01bf06116d98053a894de4b1f4adf"
+source = "git+https://github.com/nullislabs/nexum-runtime?rev=2ed882f21e685921cd27d1edec870e8adbb312aa#2ed882f21e685921cd27d1edec870e8adbb312aa"
 dependencies = [
  "alloy-chains",
  "alloy-primitives",
@@ -3398,7 +3398,7 @@ dependencies = [
 [[package]]
 name = "nexum-runtime-testing"
 version = "0.1.0"
-source = "git+https://github.com/nullislabs/nexum-runtime?rev=fd16db7709f01bf06116d98053a894de4b1f4adf#fd16db7709f01bf06116d98053a894de4b1f4adf"
+source = "git+https://github.com/nullislabs/nexum-runtime?rev=2ed882f21e685921cd27d1edec870e8adbb312aa#2ed882f21e685921cd27d1edec870e8adbb312aa"
 dependencies = [
  "alloy-chains",
  "alloy-json-rpc",
@@ -3428,7 +3428,7 @@ dependencies = [
 [[package]]
 name = "nexum-runtime-wasm"
 version = "0.1.0"
-source = "git+https://github.com/nullislabs/nexum-runtime?rev=fd16db7709f01bf06116d98053a894de4b1f4adf#fd16db7709f01bf06116d98053a894de4b1f4adf"
+source = "git+https://github.com/nullislabs/nexum-runtime?rev=2ed882f21e685921cd27d1edec870e8adbb312aa#2ed882f21e685921cd27d1edec870e8adbb312aa"
 dependencies = [
  "alloy-chains",
  "alloy-primitives",
@@ -3452,7 +3452,7 @@ dependencies = [
 [[package]]
 name = "nexum-sdk"
 version = "0.1.0"
-source = "git+https://github.com/nullislabs/nexum-runtime?rev=fd16db7709f01bf06116d98053a894de4b1f4adf#fd16db7709f01bf06116d98053a894de4b1f4adf"
+source = "git+https://github.com/nullislabs/nexum-runtime?rev=2ed882f21e685921cd27d1edec870e8adbb312aa#2ed882f21e685921cd27d1edec870e8adbb312aa"
 dependencies = [
  "alloy-chains",
  "alloy-json-rpc",
@@ -3479,7 +3479,7 @@ dependencies = [
 [[package]]
 name = "nexum-sdk-test"
 version = "0.1.0"
-source = "git+https://github.com/nullislabs/nexum-runtime?rev=fd16db7709f01bf06116d98053a894de4b1f4adf#fd16db7709f01bf06116d98053a894de4b1f4adf"
+source = "git+https://github.com/nullislabs/nexum-runtime?rev=2ed882f21e685921cd27d1edec870e8adbb312aa#2ed882f21e685921cd27d1edec870e8adbb312aa"
 dependencies = [
  "derive_more",
  "nexum-sdk",
@@ -3490,7 +3490,7 @@ dependencies = [
 [[package]]
 name = "nexum-tasks"
 version = "0.1.0"
-source = "git+https://github.com/nullislabs/nexum-runtime?rev=fd16db7709f01bf06116d98053a894de4b1f4adf#fd16db7709f01bf06116d98053a894de4b1f4adf"
+source = "git+https://github.com/nullislabs/nexum-runtime?rev=2ed882f21e685921cd27d1edec870e8adbb312aa#2ed882f21e685921cd27d1edec870e8adbb312aa"
 dependencies = [
  "futures",
  "tokio",
@@ -3500,7 +3500,7 @@ dependencies = [
 [[package]]
 name = "nexum-world"
 version = "0.1.0"
-source = "git+https://github.com/nullislabs/nexum-runtime?rev=fd16db7709f01bf06116d98053a894de4b1f4adf#fd16db7709f01bf06116d98053a894de4b1f4adf"
+source = "git+https://github.com/nullislabs/nexum-runtime?rev=2ed882f21e685921cd27d1edec870e8adbb312aa#2ed882f21e685921cd27d1edec870e8adbb312aa"
 dependencies = [
  "alloy-primitives",
  "strum",
@@ -4023,7 +4023,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4504,7 +4504,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
