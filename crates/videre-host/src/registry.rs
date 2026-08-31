@@ -8,11 +8,13 @@
 //! quota gates every quote and submit; a decode failure is charged to the
 //! calling module, so a caller feeding garbage exhausts its own budget.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures::future::BoxFuture;
+use nexum_runtime::ModuleId;
+use nexum_runtime::error::InvalidModuleName;
 use tokio::sync::Mutex as AsyncMutex;
 use tracing::warn;
 use videre_status_body::StatusBody;
@@ -26,42 +28,39 @@ use crate::bindings::{
     IntentHeader, IntentStatus, Quotation, RateLimit, SubmitOutcome, VenueError,
 };
 
-/// Venue identifier an adapter registers under. Opaque beyond equality,
-/// never empty or whitespace-only: the field is private and [`VenueId::new`]
-/// is the only constructor, so every id in the process is validated.
-/// `Ord` is derived so the registry can key a `BTreeMap` on it.
-#[derive(
-    Clone,
-    Debug,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    derive_more::AsRef,
-    derive_more::Display,
-    derive_more::Into,
-)]
-pub struct VenueId(#[as_ref(str)] String);
+/// Venue identifier an adapter registers under. Opaque beyond equality.
+/// Backed by [`ModuleId`], so a clone on the dispatch path is a refcount
+/// bump. [`VenueId::new`] is the only constructor.
+#[derive(Clone, Debug, Eq, Hash, PartialEq, derive_more::Display)]
+pub struct VenueId(ModuleId);
 
 /// A candidate venue id failed validation at a boundary.
 #[derive(Debug, thiserror::Error)]
-#[error("venue id must not be empty or whitespace-only (got {0:?})")]
-pub struct InvalidVenueId(String);
+#[error("invalid venue id: {0}")]
+pub struct InvalidVenueId(#[from] InvalidModuleName);
 
 impl VenueId {
-    /// Validating constructor: rejects empty or whitespace-only input.
-    pub fn new(id: impl Into<String>) -> Result<Self, InvalidVenueId> {
-        let id = id.into();
-        if id.trim().is_empty() {
-            return Err(InvalidVenueId(id));
-        }
-        Ok(Self(id))
+    /// Validating constructor, delegating to [`ModuleId::parse`]: a venue
+    /// id is a manifest namespace, so it obeys the same rule. A padded id
+    /// is rejected, never trimmed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidVenueId`] when `id` is blank, whitespace-padded,
+    /// or reaches outside its own namespace.
+    pub fn new(id: impl AsRef<str>) -> Result<Self, InvalidVenueId> {
+        Ok(Self(ModuleId::parse(id.as_ref())?))
     }
 
     /// The id at its wire spelling.
     pub fn as_str(&self) -> &str {
-        &self.0
+        self.0.as_str()
+    }
+}
+
+impl AsRef<str> for VenueId {
+    fn as_ref(&self) -> &str {
+        self.0.as_str()
     }
 }
 
@@ -253,7 +252,7 @@ impl VenueRegistry {
     /// keeper handshake that [`crate::Videre`] runs in its `admit_worker`
     /// hook.
     #[must_use]
-    pub fn body_versions(&self) -> BTreeMap<VenueId, BTreeSet<u32>> {
+    pub fn body_versions(&self) -> HashMap<VenueId, BTreeSet<u32>> {
         self.inner
             .adapters
             .lock()
@@ -1183,6 +1182,16 @@ mod tests {
         assert_eq!(VenueId::new("cow").expect("constructs").to_string(), "cow");
         // The derived accessor is `AsRef<str>`, matching the SDK id.
         assert_eq!(AsRef::<str>::as_ref(&cow()), "cow");
+    }
+
+    #[test]
+    fn padded_venue_id_is_rejected_at_construction() {
+        assert!("cow ".parse::<VenueId>().is_err());
+        assert!(" cow".parse::<VenueId>().is_err());
+        assert!(VenueId::new("cow\n").is_err());
+        assert!(VenueId::new("\tcow").is_err());
+        assert!(VenueId::new("cow\u{a0}").is_err());
+        assert!(VenueId::new("cow venue").is_ok());
     }
 
     #[test]

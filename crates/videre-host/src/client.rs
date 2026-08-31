@@ -34,8 +34,8 @@ fn registry() -> Result<&'static Arc<VenueRegistry>, VenueError> {
     REGISTRY.get().ok_or(VenueError::UnknownVenue)
 }
 
-/// Validate the wire venue id at the host import. A blank id can never be
-/// installed, so it is `unknown-venue`, not a resolvable venue.
+/// Validate the wire venue id at the host import. An invalid id can never
+/// be registered, so it is `unknown-venue`.
 fn venue_id(venue: String) -> Result<VenueId, VenueError> {
     VenueId::new(venue).map_err(|_| VenueError::UnknownVenue)
 }
@@ -76,20 +76,20 @@ mod tests {
     use crate::policy::SubmitQuota;
     use crate::registry::VenueRegistryBuilder;
 
-    /// The seam every `Host` method routes the wire venue id through. The
-    /// `VenueId` field is private to `registry`, so no method here can
-    /// build one that skipped this check.
+    /// The seam every `Host` method routes the wire venue id through.
     #[test]
-    fn a_blank_wire_venue_id_is_unknown_venue() {
-        assert!(matches!(
-            venue_id(String::new()),
-            Err(VenueError::UnknownVenue)
-        ));
-        assert!(matches!(
-            venue_id("  ".to_owned()),
-            Err(VenueError::UnknownVenue)
-        ));
+    fn a_blank_or_padded_wire_venue_id_is_unknown_venue() {
+        for bad in ["", "  ", "cow ", " cow", "cow\n", "cow\u{a0}"] {
+            assert!(
+                matches!(venue_id(bad.to_owned()), Err(VenueError::UnknownVenue)),
+                "{bad:?}",
+            );
+        }
         assert_eq!(venue_id("cow".to_owned()).expect("parses").as_str(), "cow");
+        assert_eq!(
+            venue_id("cow venue".to_owned()).expect("parses").as_str(),
+            "cow venue"
+        );
     }
 
     fn empty_registry() -> Arc<VenueRegistry> {

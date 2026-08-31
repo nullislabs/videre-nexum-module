@@ -18,15 +18,38 @@ use crate::bindings::videre::venue::client as shims;
 use crate::{BodyError, IntentBody, IntentStatus, Quotation, SubmitOutcome, VenueFault};
 
 /// Venue identifier: the id an adapter registers under and every client
-/// call routes to. Opaque beyond equality.
+/// call routes to. Opaque beyond equality, and validated by every
+/// constructor.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct VenueId(Cow<'static, str>);
 
+/// A candidate venue id failed validation at a boundary.
+#[derive(Debug, thiserror::Error)]
+#[error("venue id must not be empty or whitespace-padded (got {0:?})")]
+pub struct InvalidVenueId(String);
+
 impl VenueId {
     /// Wrap a static id without allocating.
+    ///
+    /// Does not validate. `#[videre_sdk::venue]` rejects a padded literal
+    /// at expansion, and the host rejects one at registration.
     #[must_use]
     pub const fn from_static(id: &'static str) -> Self {
         Self(Cow::Borrowed(id))
+    }
+
+    /// Validating constructor. A padded id is rejected, never trimmed,
+    /// because a trim would collapse two spellings into one id.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidVenueId`] when `id` is empty or whitespace-padded.
+    pub fn new(id: impl Into<Cow<'static, str>>) -> Result<Self, InvalidVenueId> {
+        let id = id.into();
+        if id.is_empty() || id != id.trim() {
+            return Err(InvalidVenueId(id.into_owned()));
+        }
+        Ok(Self(id))
     }
 
     /// The id at its wire spelling.
@@ -36,15 +59,27 @@ impl VenueId {
     }
 }
 
-impl From<String> for VenueId {
-    fn from(id: String) -> Self {
-        Self(Cow::Owned(id))
+impl std::str::FromStr for VenueId {
+    type Err = InvalidVenueId;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::new(s.to_owned())
     }
 }
 
-impl From<&str> for VenueId {
-    fn from(id: &str) -> Self {
-        Self(Cow::Owned(id.to_owned()))
+impl TryFrom<String> for VenueId {
+    type Error = InvalidVenueId;
+
+    fn try_from(id: String) -> Result<Self, Self::Error> {
+        Self::new(id)
+    }
+}
+
+impl TryFrom<&str> for VenueId {
+    type Error = InvalidVenueId;
+
+    fn try_from(id: &str) -> Result<Self, Self::Error> {
+        id.parse()
     }
 }
 
@@ -345,7 +380,62 @@ pub enum ClientError {
 mod tests {
     use std::task::Poll;
 
-    use super::poll_once;
+    use super::{VenueId, poll_once};
+
+    #[test]
+    fn blank_venue_id_is_rejected_at_construction() {
+        assert!("".parse::<VenueId>().is_err());
+        assert!("  ".parse::<VenueId>().is_err());
+        assert!(VenueId::new("\t\n").is_err());
+        assert_eq!("demo".parse::<VenueId>().expect("parses").as_str(), "demo");
+        // `:` stays legal for the future chain-qualified shape.
+        assert_eq!(
+            "demo:11155111".parse::<VenueId>().expect("parses").as_str(),
+            "demo:11155111"
+        );
+    }
+
+    #[test]
+    fn padded_venue_id_is_rejected_at_construction() {
+        assert!("demo ".parse::<VenueId>().is_err());
+        assert!(" demo".parse::<VenueId>().is_err());
+        assert!(VenueId::try_from("demo\n").is_err());
+        assert!(VenueId::try_from("\tdemo".to_owned()).is_err());
+        // Unicode whitespace at every width `str::trim` recognises.
+        for ws in ["\u{20}", "\u{a0}", "\u{2028}", "\u{3000}"] {
+            assert!(VenueId::new(format!("{ws}demo")).is_err(), "{ws:?} leads");
+            assert!(VenueId::new(format!("demo{ws}")).is_err(), "{ws:?} trails");
+            assert!(VenueId::new(ws).is_err(), "{ws:?} alone");
+        }
+        // Non-whitespace at every width, interior whitespace included.
+        for ok in ["A", "\u{c0}", "\u{4e00}", "\u{1f600}"] {
+            assert!(
+                VenueId::new(format!("{ok}demo{ok}")).is_ok(),
+                "{ok:?} wraps"
+            );
+            assert!(VenueId::new(ok).is_ok(), "{ok:?} alone");
+        }
+        assert!(VenueId::new("demo venue").is_ok());
+        // The error carries the untrimmed spelling back.
+        let err = VenueId::new(" demo ".to_owned()).expect_err("padded");
+        assert!(err.to_string().contains("\" demo \""), "{err}");
+    }
+
+    #[test]
+    fn valid_ids_construct_through_every_path() {
+        assert_eq!(VenueId::from_static("demo").as_str(), "demo");
+        assert_eq!(
+            VenueId::new("demo".to_owned())
+                .expect("constructs")
+                .as_str(),
+            "demo"
+        );
+        assert_eq!(
+            VenueId::try_from("demo").expect("converts").to_string(),
+            "demo"
+        );
+        assert_eq!(AsRef::<str>::as_ref(&VenueId::from_static("demo")), "demo");
+    }
 
     #[test]
     fn ready_chain_completes_in_one_poll() {

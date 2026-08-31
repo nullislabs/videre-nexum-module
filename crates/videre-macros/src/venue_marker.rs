@@ -83,6 +83,7 @@ pub fn expand(attr: TokenStream, input: &ItemImpl) -> Result<TokenStream, syn::E
     let id = &args.id;
     let body = &args.body;
 
+    id_shape_check(id)?;
     // Read the crate manifest at expansion and hold the id to its
     // registered name, alloy-`sol!`-style. Any mismatch is a
     // compile_error, so the marker and the adapter it types cannot drift.
@@ -98,6 +99,19 @@ pub fn expand(attr: TokenStream, input: &ItemImpl) -> Result<TokenStream, syn::E
             type Body = #body;
         }
     })
+}
+
+/// Reject an empty or whitespace-padded id literal at expansion, so the
+/// error lands before the manifest comparison.
+fn id_shape_check(id: &LitStr) -> Result<(), syn::Error> {
+    let value = id.value();
+    if value.is_empty() || value.trim().len() != value.len() {
+        return Err(syn::Error::new(
+            id.span(),
+            format!("venue id {value:?} must not be empty or whitespace-padded"),
+        ));
+    }
+    Ok(())
 }
 
 /// Assert `id` equals the crate manifest's `[component] name`, returning
@@ -124,4 +138,31 @@ fn manifest_id_check(id: &LitStr) -> Result<String, syn::Error> {
         )));
     }
     Ok(manifest_path.to_string_lossy().into_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use proc_macro2::Span;
+    use syn::LitStr;
+
+    use super::id_shape_check;
+
+    fn id_error(id: &str) -> Option<String> {
+        id_shape_check(&LitStr::new(id, Span::call_site()))
+            .err()
+            .map(|e| e.to_string())
+    }
+
+    #[test]
+    fn a_padded_or_empty_id_literal_is_rejected() {
+        assert!(id_error("demo ").is_some_and(|e| e.contains("whitespace-padded")));
+        assert!(id_error(" demo").is_some());
+        assert!(id_error("\tdemo\n").is_some());
+        assert!(id_error("demo\u{a0}").is_some());
+        assert!(id_error("").is_some());
+        assert_eq!(id_error("demo"), None);
+        // `:` stays legal for the future chain-qualified shape.
+        assert_eq!(id_error("demo:11155111"), None);
+        assert_eq!(id_error("demo venue"), None);
+    }
 }
