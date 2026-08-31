@@ -8,7 +8,7 @@
 //! quota gates every quote and submit; a decode failure is charged to the
 //! calling module, so a caller feeding garbage exhausts its own budget.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -29,22 +29,10 @@ use crate::bindings::{
 };
 
 /// Venue identifier an adapter registers under. Opaque beyond equality.
-/// The field is private and [`VenueId::new`] is the only constructor, so
-/// every id in the process is validated.
-/// `Ord` is derived so the registry can key a `BTreeMap` on it.
-#[derive(
-    Clone,
-    Debug,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    derive_more::AsRef,
-    derive_more::Display,
-    derive_more::Into,
-)]
-pub struct VenueId(#[as_ref(str)] String);
+/// Backed by [`ModuleId`], so a clone on the dispatch path is a refcount
+/// bump. [`VenueId::new`] is the only constructor.
+#[derive(Clone, Debug, Eq, Hash, PartialEq, derive_more::Display)]
+pub struct VenueId(ModuleId);
 
 /// A candidate venue id failed validation at a boundary.
 #[derive(Debug, thiserror::Error)]
@@ -61,13 +49,18 @@ impl VenueId {
     /// Returns [`InvalidVenueId`] when `id` is blank, whitespace-padded,
     /// or reaches outside its own namespace.
     pub fn new(id: impl AsRef<str>) -> Result<Self, InvalidVenueId> {
-        let id = ModuleId::parse(id.as_ref())?;
-        Ok(Self(id.as_str().to_owned()))
+        Ok(Self(ModuleId::parse(id.as_ref())?))
     }
 
     /// The id at its wire spelling.
     pub fn as_str(&self) -> &str {
-        &self.0
+        self.0.as_str()
+    }
+}
+
+impl AsRef<str> for VenueId {
+    fn as_ref(&self) -> &str {
+        self.0.as_str()
     }
 }
 
@@ -259,7 +252,7 @@ impl VenueRegistry {
     /// keeper handshake that [`crate::Videre`] runs in its `admit_worker`
     /// hook.
     #[must_use]
-    pub fn body_versions(&self) -> BTreeMap<VenueId, BTreeSet<u32>> {
+    pub fn body_versions(&self) -> HashMap<VenueId, BTreeSet<u32>> {
         self.inner
             .adapters
             .lock()

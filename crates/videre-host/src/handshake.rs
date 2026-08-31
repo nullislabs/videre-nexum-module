@@ -3,7 +3,7 @@
 //! set it decodes, and a keeper boots only when every installed adapter
 //! decodes its version.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeSet, HashMap};
 
 use anyhow::anyhow;
 use nexum_runtime::manifest::ExtensionSections;
@@ -40,7 +40,7 @@ fn parse<S: for<'de> Deserialize<'de>>(owner: &str, value: &toml::Value) -> anyh
 pub(crate) fn admit_worker(
     worker: &str,
     sections: &ExtensionSections,
-    registered: &BTreeMap<VenueId, BTreeSet<u32>>,
+    registered: &HashMap<VenueId, BTreeSet<u32>>,
 ) -> anyhow::Result<()> {
     let Some(value) = sections.get(SECTION) else {
         return Ok(());
@@ -95,7 +95,7 @@ mod tests {
     /// pairs.
     fn registered(
         venues: impl IntoIterator<Item = (&'static str, &'static [u32])>,
-    ) -> BTreeMap<VenueId, BTreeSet<u32>> {
+    ) -> HashMap<VenueId, BTreeSet<u32>> {
         venues
             .into_iter()
             .map(|(id, versions)| {
@@ -143,7 +143,7 @@ mod tests {
     #[test]
     fn no_registered_venue_refuses_a_declaring_keeper() {
         let keeper = sections("[venue]\nbody_version = 1");
-        let err = admit_worker("keeper", &keeper, &BTreeMap::new()).expect_err("refused");
+        let err = admit_worker("keeper", &keeper, &HashMap::new()).expect_err("refused");
         assert!(
             err.to_string().contains("no registered venue declares"),
             "{err}",
@@ -175,7 +175,7 @@ mod tests {
     /// A worker without a `[venue]` section is admitted.
     #[test]
     fn undeclared_sections_are_admitted() {
-        admit_worker("keeper", &ExtensionSections::new(), &BTreeMap::new())
+        admit_worker("keeper", &ExtensionSections::new(), &HashMap::new())
             .expect("worker admitted");
     }
 
@@ -183,7 +183,7 @@ mod tests {
     #[test]
     fn wrong_side_spelling_is_refused() {
         let keeper = sections("[venue]\nbody_versions = [1]");
-        let err = admit_worker("keeper", &keeper, &BTreeMap::new())
+        let err = admit_worker("keeper", &keeper, &HashMap::new())
             .expect_err("keeper with the venue key");
         assert!(err.to_string().contains("keeper [venue]"), "{err}");
     }
