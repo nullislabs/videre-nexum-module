@@ -38,11 +38,12 @@ pub const DEFAULT_RECONCILE_BUDGET: usize = 16;
 
 /// A keeper: one poller bound to one venue, run over the
 /// keeper stores.
-pub struct Keeper<S, P> {
+pub struct Keeper<S, P, F = DefaultFaultPolicy> {
     source: S,
     venues: P,
     venue: VenueId,
     max_per_tick: usize,
+    fault_policy: F,
 }
 
 impl<S, P> Keeper<S, P> {
@@ -54,6 +55,24 @@ impl<S, P> Keeper<S, P> {
             venues,
             venue,
             max_per_tick: DEFAULT_RECONCILE_BUDGET,
+            fault_policy: DefaultFaultPolicy,
+        }
+    }
+
+    /// Use `fault_policy` instead of [`DefaultFaultPolicy`].
+    ///
+    /// The default cannot assume a venue is idempotent, so it removes a
+    /// commitment on any fault it cannot attribute. A venue that can say
+    /// more supplies its own here, and it governs both the submit path
+    /// and the reconcile pass.
+    #[must_use]
+    pub fn with_fault_policy<G>(self, fault_policy: G) -> Keeper<S, P, G> {
+        Keeper {
+            source: self.source,
+            venues: self.venues,
+            venue: self.venue,
+            max_per_tick: self.max_per_tick,
+            fault_policy,
         }
     }
 
@@ -71,7 +90,7 @@ impl<S, P> Keeper<S, P> {
     }
 }
 
-impl<S, P: VenueTransport> Keeper<S, P> {
+impl<S, P: VenueTransport, F: FaultPolicy> Keeper<S, P, F> {
     /// Run one sweep at `tick`: the [`reconcile`] pass first (budget-bounded),
     /// then every gate-ready commitment is polled and an [`Outcome::Submit`]
     /// body reserved on its [`submission_key`] before the venue await,
@@ -96,7 +115,15 @@ impl<S, P: VenueTransport> Keeper<S, P> {
         let journal = Journal::submitted(host);
         let mut report = RunReport::default();
 
-        let rec = reconcile(&self.venue, &self.venues, &journal, tick, self.max_per_tick).await?;
+        let rec = reconcile(
+            &self.venue,
+            &self.venues,
+            &journal,
+            tick,
+            self.max_per_tick,
+            &self.fault_policy,
+        )
+        .await?;
         report.reconciled_committed = rec.committed;
         report.reconciled_released = rec.released;
         report.reconciled_pending = rec.pending;
@@ -163,7 +190,7 @@ impl<S, P: VenueTransport> Keeper<S, P> {
                                 // the reserve, then fold the refusal.
                                 Err(fault) => {
                                     journal.release(&key)?;
-                                    retry_action(&fault)
+                                    self.fault_policy.action(&fault)
                                 }
                             }
                         }
@@ -201,19 +228,21 @@ impl<S, P: VenueTransport> Keeper<S, P> {
 /// - `next_eligible > tick.epoch_s`: still backing off, left untouched.
 /// - accepted: committed.
 /// - `requires-signing`: released, the tx surfaced to the caller.
-/// - terminal refusal (a [`RetryAction::Drop`] fault): released.
+/// - terminal refusal (one `policy` calls terminal): released.
 /// - transient refusal: left `RESERVED` for the next tick; a rate-limit
 ///   hint re-parks `next_eligible`.
-pub async fn reconcile<H, P>(
+pub async fn reconcile<H, P, F>(
     venue: &VenueId,
     venues: &P,
     journal: &Journal<'_, H>,
     tick: &Tick,
     max_per_tick: usize,
+    policy: &F,
 ) -> Result<ReconcileReport, Fault>
 where
     H: LocalStoreHost,
     P: VenueTransport,
+    F: FaultPolicy,
 {
     let mut report = ReconcileReport::default();
     let mut spent = 0usize;
@@ -240,7 +269,7 @@ where
                 journal.release(&key)?;
                 report.unsigned.push(tx);
             }
-            Err(fault) if is_terminal(&fault) => {
+            Err(fault) if policy.is_terminal(&fault) => {
                 journal.release(&key)?;
                 report.released += 1;
             }
@@ -256,12 +285,6 @@ where
         }
     }
     Ok(report)
-}
-
-/// A venue refusal no resubmit can cure: its [`retry_action`] drops the
-/// commitment, so the reservation is safe to release.
-fn is_terminal(fault: &VenueFault) -> bool {
-    matches!(retry_action(fault), RetryAction::Drop)
 }
 
 /// One run's tally, by commitment disposition.
@@ -324,9 +347,55 @@ pub fn submission_key(venue: &VenueId, body: &[u8]) -> String {
     format!("{venue}:{}", hex::encode_prefixed(keccak256(body)))
 }
 
-/// Fold a venue refusal into a retry action: a throttle hint becomes an
-/// epoch gate, transient failures retry next block, and refusals no retry
-/// can cure drop the commitment.
+/// How a venue's faults map to retry actions.
+///
+/// Videre does not know what a venue does when it is asked twice. A
+/// submission may be something the venue dedupes, or it may be an act
+/// that happens again. So the platform does not decide for one: this is
+/// the seam a keeper implements when its venue can say more than
+/// [`retry_action`] assumes.
+pub trait FaultPolicy {
+    /// What to do with a commitment whose submission raised `fault`.
+    fn action(&self, fault: &VenueFault) -> RetryAction;
+
+    /// Whether `fault` ends the submission, so its reservation can be
+    /// released. Derived from [`action`](Self::action), so an override
+    /// moves the reconcile path with the submit path.
+    fn is_terminal(&self, fault: &VenueFault) -> bool {
+        matches!(self.action(fault), RetryAction::Drop)
+    }
+}
+
+/// [`retry_action`] as a [`FaultPolicy`].
+///
+/// A doc test, so it is compiled as a downstream crate: naming the unit
+/// value is what a consumer does, and an attribute that made it private
+/// outside this crate would pass every in-crate test.
+///
+/// ```
+/// use videre_sdk::{DefaultFaultPolicy, FaultPolicy, VenueFault};
+///
+/// assert!(DefaultFaultPolicy.is_terminal(&VenueFault::Unsupported));
+/// assert!(!DefaultFaultPolicy.is_terminal(&VenueFault::Timeout));
+/// ```
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DefaultFaultPolicy;
+
+impl FaultPolicy for DefaultFaultPolicy {
+    fn action(&self, fault: &VenueFault) -> RetryAction {
+        retry_action(fault)
+    }
+}
+
+/// Fold a venue refusal into a retry action, conservatively.
+///
+/// Transient faults retry; everything else removes the commitment,
+/// because a fault this seam cannot attribute leaves the submission
+/// ambiguous, and repeating an ambiguous submission at a venue that is
+/// not idempotent is worse than losing the commitment.
+///
+/// A venue that can attribute better supplies a [`FaultPolicy`] instead
+/// of accepting this.
 pub fn retry_action(fault: &VenueFault) -> RetryAction {
     match fault {
         VenueFault::RateLimited {
@@ -361,8 +430,8 @@ mod tests {
     use nexum_sdk_test::{MockLocalStore, TrapStore};
 
     use super::{
-        DEFAULT_RECONCILE_BUDGET, Keeper, Outcome, RunReport, is_terminal, reconcile,
-        submission_key,
+        DEFAULT_RECONCILE_BUDGET, DefaultFaultPolicy, FaultPolicy, Keeper, Outcome,
+        ReconcileReport, RetryAction, RunReport, reconcile, retry_action, submission_key,
     };
     use crate::client::{VenueId, VenueTransport};
     use crate::{IntentStatus, Quotation, SubmitOutcome, UnsignedTx, VenueFault};
@@ -1309,7 +1378,7 @@ mod tests {
                     }) => Disposition::Park {
                         until: tick.epoch_s.saturating_add(ms.div_ceil(1000)),
                     },
-                    Err(fault) if is_terminal(fault) => Disposition::Release,
+                    Err(fault) if DefaultFaultPolicy.is_terminal(fault) => Disposition::Release,
                     Err(_) => Disposition::Retain,
                 };
                 (disposition, outcome)
@@ -1355,6 +1424,7 @@ mod tests {
             &journal,
             &TICK,
             DEFAULT_RECONCILE_BUDGET,
+            &DefaultFaultPolicy,
         ))
         .expect("reconcile runs");
         assert_eq!(report.committed, 1);
@@ -1421,6 +1491,7 @@ mod tests {
             &journal,
             &TICK,
             DEFAULT_RECONCILE_BUDGET,
+            &DefaultFaultPolicy,
         ))
         .expect("reconcile runs");
         assert_eq!(report.gated, 1);
@@ -1438,6 +1509,7 @@ mod tests {
             &journal,
             &at_2,
             DEFAULT_RECONCILE_BUDGET,
+            &DefaultFaultPolicy,
         ))
         .expect("reconcile runs");
         assert_eq!(report.committed, 1);
@@ -1458,5 +1530,103 @@ mod tests {
         let out = run(guarded_submit(&journal, &venue, b"order", &TICK)).expect("guard runs");
         assert!(matches!(out, Guarded::Skipped(Mark::Reserved)));
         assert_eq!(venue.post_count(), 1);
+    }
+
+    /// Videre does not know whether a venue repeats an act when asked
+    /// twice, so its default refuses to guess: anything it cannot
+    /// attribute removes the commitment rather than risk a second
+    /// submission.
+    #[test]
+    fn the_default_policy_removes_what_it_cannot_attribute() {
+        for fault in [
+            VenueFault::ReceiptMismatch,
+            VenueFault::InvalidReceipt,
+            VenueFault::UnknownVenue,
+            VenueFault::InvalidBody("bad".to_owned()),
+            VenueFault::Unsupported,
+        ] {
+            assert_eq!(retry_action(&fault), RetryAction::Drop, "{fault:?}");
+            assert!(DefaultFaultPolicy.is_terminal(&fault), "{fault:?}");
+        }
+    }
+
+    /// Availability faults are the ones it can attribute, and they retry.
+    #[test]
+    fn the_default_policy_retries_an_availability_fault() {
+        for fault in [
+            VenueFault::Timeout,
+            VenueFault::Unavailable("down".to_owned()),
+            VenueFault::RateLimited {
+                retry_after_ms: None,
+            },
+        ] {
+            assert_eq!(retry_action(&fault), RetryAction::TryNextBlock, "{fault:?}");
+        }
+    }
+
+    /// A venue whose submissions are idempotent, so an ambiguous receipt
+    /// is worth retrying rather than grounds to forget the submission.
+    struct Idempotent;
+
+    impl FaultPolicy for Idempotent {
+        fn action(&self, fault: &VenueFault) -> RetryAction {
+            match fault {
+                VenueFault::ReceiptMismatch => RetryAction::Backoff { seconds: 300 },
+                other => retry_action(other),
+            }
+        }
+    }
+
+    /// `is_terminal` derives from `action`, so overriding one moves the
+    /// other rather than leaving the two paths to disagree.
+    #[test]
+    fn a_venue_policy_carries_is_terminal_with_it() {
+        let fault = VenueFault::ReceiptMismatch;
+        assert_eq!(
+            Idempotent.action(&fault),
+            RetryAction::Backoff { seconds: 300 },
+        );
+        assert!(!Idempotent.is_terminal(&fault));
+        assert!(
+            DefaultFaultPolicy.is_terminal(&fault),
+            "while the default still releases it",
+        );
+    }
+
+    /// And `reconcile` honours it: the same stranded reservation and the
+    /// same fault are released under the default and kept under a policy
+    /// that can retry them. Without this, the `policy.is_terminal` call
+    /// site could be wired to anything and the suite would stay green.
+    #[test]
+    fn reconcile_releases_or_keeps_by_the_policy_it_is_given() {
+        fn reconcile_with<F: FaultPolicy>(policy: &F) -> (ReconcileReport, bool) {
+            let host = MockLocalStore::default();
+            let journal = Journal::submitted(&host);
+            journal.reserve("k", b"body").expect("reserve");
+            let venue = StubVenue::new(Err(VenueFault::ReceiptMismatch));
+            let report = run(reconcile(
+                &VenueId::from_static(STUB),
+                &&venue,
+                &journal,
+                &TICK,
+                DEFAULT_RECONCILE_BUDGET,
+                policy,
+            ))
+            .expect("reconcile runs");
+            let still_held = !journal.pending().expect("journal reads").is_empty();
+            (report, still_held)
+        }
+
+        let (default, held_by_default) = reconcile_with(&DefaultFaultPolicy);
+        assert_eq!(default.released, 1, "the default releases the reservation");
+        assert!(!held_by_default);
+
+        let (venue_policy, held_by_venue) = reconcile_with(&Idempotent);
+        assert_eq!(
+            venue_policy.released, 0,
+            "a venue that can retry keeps its reservation",
+        );
+        assert_eq!(venue_policy.pending, 1);
+        assert!(held_by_venue);
     }
 }
