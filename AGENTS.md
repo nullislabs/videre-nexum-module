@@ -43,7 +43,7 @@ The runtime renamed all of these: the file was `module.toml`, the tables were `[
 
 ## Build, test, lint
 
-The workspace uses Rust edition 2024, and the toolchain is pinned to 1.94 in both `flake.nix` and `.github/actions/rust-setup`.
+The workspace uses Rust edition 2024, and the toolchain is pinned to 1.96 in both `flake.nix` and `.github/actions/rust-setup`.
 Run `nix develop` first, or run `direnv allow` once, to get that toolchain with `cargo-nextest`, `wasm-tools`, `wabt`, `just`, `ripgrep`, and `ast-grep`.
 
 ```sh
