@@ -13,7 +13,7 @@ proc-macro = true
 workspace = true
 
 [dependencies]
-nexum-world = { git = "https://github.com/nullislabs/nexum-runtime", rev = "2085cd2dfb39ac45ffcb9fbfd19a7d44faeda433", features = ["macros"] }
+nexum-world = { git = "https://github.com/nullislabs/nexum-runtime", rev = "15e4a383ed715947c1b00a96649a0a03927ee9e9", features = ["macros"] }
 proc-macro2.workspace = true
 quote.workspace = true
 syn = { workspace = true, features = ["full"] }

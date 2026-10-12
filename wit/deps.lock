@@ -1,5 +1,5 @@
 [nexum-host]
-url = "https://github.com/nullislabs/nexum-runtime/archive/2085cd2dfb39ac45ffcb9fbfd19a7d44faeda433.tar.gz"
-prefix = "nexum-runtime-2085cd2dfb39ac45ffcb9fbfd19a7d44faeda433/wit/nexum-host"
+url = "https://github.com/nullislabs/nexum-runtime/archive/15e4a383ed715947c1b00a96649a0a03927ee9e9.tar.gz"
+prefix = "nexum-runtime-15e4a383ed715947c1b00a96649a0a03927ee9e9/wit/nexum-host"
 sha256 = "9c2b817e68645456b46457615995d55567a6a9b62ecc294ec382295ed9b9b1fd"
 sha512 = "35f5972cb091da49180b948399dcf4e6714a1581e2828cf57067f0cddf791fc6360cfe16067d6811077570434370d7dae13342497ecc8e24a6fc28a327aa6155"
