@@ -13,7 +13,7 @@ workspace = true
 crate-type = ["cdylib"]
 
 [dependencies]
-nexum-sdk = { git = "https://github.com/nullislabs/nexum-runtime", rev = "2085cd2dfb39ac45ffcb9fbfd19a7d44faeda433" }
+nexum-sdk = { git = "https://github.com/nullislabs/nexum-runtime", rev = "15e4a383ed715947c1b00a96649a0a03927ee9e9" }
 # The venue status-body codec the `on_extension` handler decodes an
 # intent-status transition through, reached via `videre_sdk::status_body`.
 videre-sdk = { path = "../../../crates/videre-sdk" }
