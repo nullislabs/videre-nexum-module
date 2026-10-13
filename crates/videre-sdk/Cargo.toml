@@ -27,7 +27,7 @@ videre-macros = { path = "../videre-macros" }
 # Host-neutral SDK layer this crate builds on: the `ChainHost` seam the
 # chain wrapper implements, the shared `Fault` vocabulary, and the
 # wasi:http `fetch` surface re-exported as `transport::http`.
-nexum-sdk = { git = "https://github.com/nullislabs/nexum-runtime", rev = "15e4a383ed715947c1b00a96649a0a03927ee9e9" }
+nexum-sdk = { git = "https://github.com/nxm-rs/nexum-runtime", rev = "1010d8402b9c902388938834936dfe8a055cbe57" }
 # The venue status-body codec, re-exported as `videre_sdk::status_body`;
 # venue guests reach the `intent-status` decode path through here.
 videre-status-body = { path = "../videre-status-body" }
@@ -42,4 +42,4 @@ wit-bindgen.workspace = true
 
 [dev-dependencies]
 # In-memory `LocalStoreHost` behind the keeper run tests.
-nexum-sdk-test = { git = "https://github.com/nullislabs/nexum-runtime", rev = "15e4a383ed715947c1b00a96649a0a03927ee9e9" }
+nexum-sdk-test = { git = "https://github.com/nxm-rs/nexum-runtime", rev = "1010d8402b9c902388938834936dfe8a055cbe57" }

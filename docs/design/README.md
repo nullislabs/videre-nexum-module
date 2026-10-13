@@ -22,4 +22,4 @@ A keeper stays a guest wasm component, and it still reaches a venue through `vid
 ## Landing places
 
 The wit-deps re-vendor and freeze runbook (tracker issue #22) lands here.
-Tracker issue #45 is a hard precondition for it: the digests in `wit/deps.toml` are placeholders until #45 records the real ones.
+Tracker issue #45 was a hard precondition for it: `wit/deps.toml` now records the real digests.
