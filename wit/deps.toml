@@ -12,7 +12,7 @@
 # GitHub does not promise stable bytes for an auto-generated archive, so
 # a digest mismatch can be its churn and not tampering.
 [nexum-host]
-url = "https://github.com/nullislabs/nexum-runtime/archive/15e4a383ed715947c1b00a96649a0a03927ee9e9.tar.gz"
-sha256 = "2da4ec732c385bd9a4e360c9d7edfc8ce24411d70b22089daf5fa14b3815b2e7"
-sha512 = "2b6f900944abe67233c597205cbd6eca29f3fc82493fa4a20ab07910cacdd631a9ac5e6ad98f83af9f7816d82e7e661ea6e61557c0b61425856476e723d4b985"
-prefix = "nexum-runtime-15e4a383ed715947c1b00a96649a0a03927ee9e9/wit/nexum-host"
+url = "https://github.com/nxm-rs/nexum-runtime/archive/1010d8402b9c902388938834936dfe8a055cbe57.tar.gz"
+sha256 = "be0cdebf70f9b0e75d8eeac0af621d2b45729bebbeb15d8b3f4e998d86c78ad4"
+sha512 = "88f7815a58e78099a7e8660c396e206c3e7171f2ebd4e549b8e4b5a132a6fee322bb6b685fd04683e694f9f280349a8a93a8cc18f56383938cbd60ee8413330c"
+prefix = "nexum-runtime-1010d8402b9c902388938834936dfe8a055cbe57/wit/nexum-host"

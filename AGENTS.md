@@ -4,7 +4,7 @@
 
 ## What videre is
 
-Videre is the venue platform for the [nexum runtime](https://github.com/nullislabs/nexum-runtime), and it is layer 2 of a three-repo stack.
+Videre is the venue platform for the [nexum runtime](https://github.com/nxm-rs/nexum-runtime), and it is layer 2 of a three-repo stack.
 The nexum runtime is the generic layer 1, and [shepherd](https://github.com/nullislabs/shepherd) is the top layer that holds the engine composition root.
 Videre plugs into the runtime through the `Extension` seam: `videre_host::platform()` returns a `Videre` value that implements `nexum_runtime::extension::Extension`.
 A composition root wires it with `builder.with_extensions([Arc::new(videre_host::platform())])`.

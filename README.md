@@ -1,6 +1,6 @@
 # videre
 
-The videre venue platform for the [nexum runtime](https://github.com/nullislabs/nexum-runtime): the venue registry service, the `VenueInvoker` adapter seam, the guest-side keeper SDK, and the `videre:venue` WIT surface. Carved out of the nullislabs monorepo with full history; the engine composition root lives in [shepherd](https://github.com/nullislabs/shepherd).
+The videre venue platform for the [nexum runtime](https://github.com/nxm-rs/nexum-runtime): the venue registry service, the `VenueInvoker` adapter seam, the guest-side keeper SDK, and the `videre:venue` WIT surface. Carved out of the nullislabs monorepo with full history; the engine composition root lives in [shepherd](https://github.com/nullislabs/shepherd).
 
 A venue is a native Rust adapter. It implements `videre_host::VenueInvoker`, and the composition root registers it with `VenueRegistry::register`. A venue was a guest wasm component until the runtime deleted the extension-installed component path, so an extension can no longer install or supervise a guest. A keeper stays a guest wasm component and reaches a venue through `videre:venue/client`.
 
@@ -36,4 +36,4 @@ Cross-repo dependencies on the nexum runtime are pinned by git rev in the crate 
 
 ## Licence
 
-AGPL-3.0. See [LICENSE](LICENSE).
+AGPL-3.0-or-later. See [LICENSE](LICENSE).

@@ -16,8 +16,8 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-license = "AGPL-3.0"
-repository = "https://github.com/nullislabs/videre-nexum-module"
+license = "AGPL-3.0-or-later"
+repository = "https://github.com/nxm-rs/videre"
 
 # Shared dependency table. Every external dependency is hoisted here.
 # Core workspace crates (the host extension, SDK, macros, test kit)
